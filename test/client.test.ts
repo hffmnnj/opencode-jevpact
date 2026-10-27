@@ -307,4 +307,66 @@ describe("typesafe transport", () => {
       );
     }
   });
+
+  it("reports_distinct_token_usage", async () => {
+    const { fetch } = stubFetch(() =>
+      jsonResponse({ ...validPayload(), usage: { input_tokens: 123, output_tokens: 456 } }),
+    );
+    const result = await evaluate(evidence(), { apiKey: "usage-key-021", fetch });
+    assert.deepEqual({ ...result.usage }, { inputTokens: 123, outputTokens: 456 });
+    assert.equal(result.answers.boundary.choice, "yes");
+  });
+
+  it("accepts_zero_token_usage", async () => {
+    const { fetch } = stubFetch(() =>
+      jsonResponse({ ...validPayload(), usage: { input_tokens: 0, output_tokens: 0 } }),
+    );
+    const result = await evaluate(evidence(), { apiKey: "usage-key-022", fetch });
+    assert.deepEqual({ ...result.usage }, { inputTokens: 0, outputTokens: 0 });
+  });
+
+  it("omits_missing_usage", async () => {
+    const { fetch } = stubFetch(() => jsonResponse(validPayload()));
+    const result = await evaluate(evidence(), { apiKey: "usage-key-023", fetch });
+    assert.equal(result.usage, undefined);
+    assert.equal(result.answers.boundary.choice, "yes");
+  });
+
+  it("omits_malformed_usage_but_accepts_answers", async () => {
+    const malformed: unknown[] = [
+      { input_tokens: -1, output_tokens: 5 },
+      { input_tokens: 1.5, output_tokens: 5 },
+      { input_tokens: "12", output_tokens: 5 },
+      { input_tokens: Number.POSITIVE_INFINITY, output_tokens: 5 },
+      { input_tokens: Number.NaN, output_tokens: 5 },
+      { input_tokens: Number.MAX_SAFE_INTEGER + 1, output_tokens: 5 },
+      { input_tokens: 5, output_tokens: -2 },
+      { input_tokens: 5 },
+      { output_tokens: 5 },
+      null,
+      "usage",
+      [{ input_tokens: 5, output_tokens: 5 }],
+    ];
+    for (const usage of malformed) {
+      const { fetch } = stubFetch(() => jsonResponse({ ...validPayload(), usage }));
+      const result = await evaluate(evidence(), { apiKey: "usage-key-024", fetch });
+      assert.equal(result.usage, undefined, `malformed usage must be omitted: ${String(JSON.stringify(usage))}`);
+      assert.equal(result.answers.boundary.choice, "yes");
+    }
+  });
+
+  it("ignores_extra_usage_fields", async () => {
+    const { fetch } = stubFetch(() =>
+      jsonResponse({
+        ...validPayload(),
+        usage: { input_tokens: 10, output_tokens: 20, total_tokens: 30, model: "other" },
+      }),
+    );
+    const result = await evaluate(evidence(), { apiKey: "usage-key-025", fetch });
+    assert.deepEqual({ ...(result.usage as object) }, { inputTokens: 10, outputTokens: 20 });
+    assert.deepEqual(Object.keys({ ...(result.usage as object) }).sort(), [
+      "inputTokens",
+      "outputTokens",
+    ]);
+  });
 });
