@@ -27,6 +27,7 @@
 - Recovered visible retained native task requests, separated peer traffic, labelled summary fallback, and admitted completed progress-list-only updates without relaxing external-result guards. Child-result arrivals now cancel in-flight judgments.
 - Confirmed the long session's retained task is recovered in an offline report-prefix check; peer message bodies are excluded. Earlier attractive checkpoints before activation were retrospective examples, not live-plugin failures.
 - Typecheck and all 106 tests passed. Live Jev diagnostic succeeded in 288 ms; both active locations expose the upgraded policy, preserve collection start 1793060656906, and report healthy event streams on unchanged PID 219124.
+- Published the live checkpoint upgrade: https://github.com/hffmnnj/opencode-jevpact/pull/3. Real historical progress-list-only report passes structural selection; the shell-result report still declines.
 
 ## Follow-ups
 - Observe real-workload checkpoint frequency and token cost; no efficiency gain is claimed yet.
