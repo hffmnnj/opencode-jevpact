@@ -40,7 +40,43 @@ original native OpenCode V2 plugin in that spirit, not a verbatim port.
 
 Status keeps only counts, choices, and error strings. No transcript text and
 no credentials are stored. A checkpoint message ID is persisted for reload
-deduplication. Counters cover the current plugin instance.
+deduplication. Top-level status counters cover the current plugin instance;
+lifetime aggregate totals live in `status.stats` (see Statistics below).
+
+## Statistics
+
+Lifetime aggregate totals live in native OpenCode plugin storage under key
+`stats/v1`, shared across locations and surviving plugin reloads and server
+restarts. Durable collection starts with this version: earlier in-memory
+counts are not recoverable history and are not backfilled. There is no
+telemetry service, transcript archive, daily history, dashboard, reset/delete
+endpoint, or estimated savings or cost.
+
+The stored shape holds only timestamps, allow-listed counters, the fixed
+skip reasons, cumulative and maximum latency, validated TypeSafe
+input/output token totals with a usage sample count, and requested route
+counts by mode. No error strings, session content, credentials, or arbitrary
+response metadata are stored.
+
+- TypeSafe usage is optional: missing or malformed usage is unknown, not a
+  fabricated zero. Only validated input/output pairs add a usage sample.
+- Diagnostic calls have separate counts from real checkpoint evaluations,
+  but known token usage and latency include both, so diagnostics' API
+  consumption is not hidden.
+- `compactionsRequested` counts plugin native admissions, while
+  `compactionsCompleted`/`compactionsFailed` count all native completion and
+  failure events observed by the plugin, including native manual and
+  pressure events. They are observed, not attributed savings.
+- The durable aggregate is served in `status.stats` and the read-only
+  `jevpact/stats` RPC. Both carry a `statsStorageErrors` collection/persistence
+  failure count (in memory, itself not durable when writes fail). If
+  saved totals cannot be read, `stats` is `null` rather than fake zeros.
+  Failed writes also raise this indicator and can leave gaps in the totals;
+  normal compaction behavior continues.
+
+Read the aggregate via `POST /api/rpc/jevpact/stats` with body `{"input":{}}`
+using the server's existing OpenCode authentication. `node scripts/check-live.ts`
+prints the full status output, including `status.stats`.
 
 ## What carries over from JevPact
 
@@ -111,6 +147,7 @@ invalid evidence does not trigger compaction.
 Read-only live RPC methods (use the server's existing key):
 
 - `jevpact/status` — loaded, configured, and last-decision counts.
+- `jevpact/stats` — lifetime aggregate totals (read-only; `null` when storage is unavailable).
 - `jevpact/check` — one live Jev call using an embedded harmless sample,
   never session text.
 

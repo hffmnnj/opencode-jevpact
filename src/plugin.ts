@@ -4,11 +4,17 @@ import { evaluate, MODEL } from "./client.ts";
 import { snapshot } from "./evidence.ts";
 import { eligible, parsePolicy, shouldCompact } from "./policy.ts";
 import type { Evaluation, Evidence } from "./types.ts";
+import { createStats } from "./stats.ts";
+import type { StatsEvent } from "./stats-types.ts";
 
 const emptyInput = { type: "object", properties: {}, additionalProperties: false } as const;
 const rpc = Rpc.define({
   id: "jevpact",
-  methods: { status: { input: emptyInput, output: { type: "object" } }, check: { input: emptyInput, output: { type: "object" } } },
+  methods: {
+    status: { input: emptyInput, output: { type: "object" } },
+    stats: { input: emptyInput, output: { type: "object" } },
+    check: { input: emptyInput, output: { type: "object" } },
+  },
   events: {},
 });
 
@@ -44,6 +50,8 @@ export function createPlugin(dependencies: Dependencies = {}): Plugin.Plugin {
       const key = dependencies.apiKey ?? (() => process.env.TYPESAFE_API_KEY);
       const judge = dependencies.evaluate ?? evaluate;
       const now = dependencies.now ?? Date.now;
+      const durableStats = createStats(ctx.storage, now);
+      let statsStorageErrors = 0;
       const lifetime = new AbortController();
       const sessions = new Map<string, SessionState>();
       const tasks = new Set<Promise<void>>();
@@ -51,6 +59,22 @@ export function createPlugin(dependencies: Dependencies = {}): Plugin.Plugin {
       let lastDecision: Record<string, unknown> | null = null;
       let lastSkipReason: string | null = null;
       let eventStreamHealthy = false;
+
+      function record(event: StatsEvent): Promise<void> {
+        const task = durableStats.record(event).catch(() => { statsStorageErrors++; });
+        tasks.add(task);
+        void task.finally(() => tasks.delete(task)).catch(() => {});
+        return task;
+      }
+
+      async function readStats() {
+        try {
+          return { stats: await durableStats.read(), statsStorageErrors };
+        } catch {
+          statsStorageErrors++;
+          return { stats: null, statsStorageErrors };
+        }
+      }
 
       function state(sessionID: string): SessionState {
         let value = sessions.get(sessionID);
@@ -98,6 +122,9 @@ export function createPlugin(dependencies: Dependencies = {}): Plugin.Plugin {
                 value.requests = 0;
                 counters.compactionsCompleted++;
               }
+              if (event.location?.directory === ctx.location.directory) {
+                void record({ type: "compaction", phase: event.type === "session.compaction.ended" ? "completed" : "failed" });
+              }
             }
             if (event.type === "session.deleted") {
               invalidate(event.data.sessionID);
@@ -105,7 +132,10 @@ export function createPlugin(dependencies: Dependencies = {}): Plugin.Plugin {
             }
           }
         } catch {
-          if (!lifetime.signal.aborted) counters.errors++;
+          if (!lifetime.signal.aborted) {
+            counters.errors++;
+            void record({ type: "error" });
+          }
         } finally {
           eventStreamHealthy = false;
           for (const value of sessions.values()) value.controller?.abort();
@@ -113,12 +143,16 @@ export function createPlugin(dependencies: Dependencies = {}): Plugin.Plugin {
       })();
 
       await ctx.rpc.register(rpc, {
-        status: async () => ({ enabled, configured: Boolean(key()?.trim()), model: MODEL, location: ctx.location.directory, policy, eventStreamHealthy, ...counters, lastDecision, lastSkipReason }),
+        status: async () => ({ enabled, configured: Boolean(key()?.trim()), model: MODEL, location: ctx.location.directory, policy, eventStreamHealthy, ...counters, lastDecision, lastSkipReason, ...await readStats() }),
+        stats: async () => await readStats(),
         check: async (_input, call) => {
+          const started = now();
           try {
             const result = await judge({ excerpt: "User: Implement the parser, then deploy it.\nAssistant: The parser implementation is complete. All parser tests passed and their results confirm the expected behavior. The implementation phase is finished. The next distinct phase is deployment.", inputTokens: 0, contextWindow: 0 }, { apiKey: key() ?? "", signal: AbortSignal.any([lifetime.signal, call.signal]) });
+            void record({ type: "diagnostic", outcome: "success", latencyMs: result.latencyMs, ...(result.usage ? { usage: result.usage } : {}) });
             return { ok: true, ...result, wouldCompact: shouldCompact(result, policy) };
           } catch {
+            void record({ type: "diagnostic", outcome: "error", latencyMs: Math.max(0, now() - started) });
             return { ok: false, model: MODEL, error: "Jev diagnostic failed; verify key availability and TypeSafe connectivity" };
           }
         },
@@ -127,11 +161,13 @@ export function createPlugin(dependencies: Dependencies = {}): Plugin.Plugin {
       async function consider(sessionID: string, ref?: { providerID: string; id: string }) {
         if (!enabled || !key()?.trim() || lifetime.signal.aborted || !eventStreamHealthy) return;
         const value = state(sessionID);
-        if (value.pending || value.controller) return;
+        if (value.pending || value.controller) { void record({ type: "skip", reason: "busy" }); return; }
         const controller = new AbortController();
         value.controller = controller;
         const signal = AbortSignal.any([lifetime.signal, controller.signal]);
         const revision = value.revision;
+        let evaluationStartedAt: number | undefined;
+        let evaluationRecorded = false;
         try {
           const session = await ctx.session.get({ sessionID });
           if (session.location.directory !== ctx.location.directory || session.outcome === "interrupted" || session.outcome === "failed") return;
@@ -142,7 +178,7 @@ export function createPlugin(dependencies: Dependencies = {}): Plugin.Plugin {
           if (!model) return;
           const messages = await ctx.session.context({ sessionID });
           const view = snapshot(messages, model.limit.context);
-          if (!view) { lastSkipReason = "No complete current-turn report, source coverage is incomplete, or newer activity is uninterpreted"; return; }
+          if (!view) { lastSkipReason = "No complete current-turn report, source coverage is incomplete, or newer activity is uninterpreted"; void record({ type: "skip", reason: "evidence" }); return; }
           if (!value.initialized || view.compactionID !== value.compactionID || value.resetBaseline) {
             value.compactionID = view.compactionID;
             value.baselineTokens = view.baselineTokens;
@@ -150,16 +186,24 @@ export function createPlugin(dependencies: Dependencies = {}): Plugin.Plugin {
             value.resetBaseline = false;
           }
           value.requests = view.requestsSinceCompaction;
-          if (view.checkpoint === value.lastCheckpoint) return;
+          if (view.checkpoint === value.lastCheckpoint) { void record({ type: "skip", reason: "duplicate" }); return; }
           value.lastCheckpoint = view.checkpoint;
-          if (!eligible(view.evidence, value, policy, now())) { lastSkipReason = "Below usage, growth, request-count, or cooldown threshold"; return; }
+          if (!eligible(view.evidence, value, policy, now())) { lastSkipReason = "Below usage, growth, request-count, or cooldown threshold"; void record({ type: "skip", reason: "threshold" }); return; }
           const marker = `checkpoint/${sessionID}`;
-          if (await ctx.storage.get(marker) === view.checkpoint) return;
+          if (await ctx.storage.get(marker) === view.checkpoint) { void record({ type: "skip", reason: "duplicate" }); return; }
           value.lastEvaluationAt = now();
           counters.evaluations++;
+          evaluationStartedAt = now();
           const result = await judge(view.evidence, { apiKey: key() ?? "", signal });
-          if (signal.aborted || revision !== value.revision || !eventStreamHealthy) { lastSkipReason = "Judgment cancelled by new direction, execution, compaction, or unload"; return; }
+          if (signal.aborted || revision !== value.revision || !eventStreamHealthy) {
+            evaluationRecorded = true;
+            void record({ type: "evaluation", outcome: "cancelled", latencyMs: result.latencyMs, ...(result.usage ? { usage: result.usage } : {}) });
+            lastSkipReason = "Judgment cancelled by new direction, execution, compaction, or unload";
+            return;
+          }
           const compact = shouldCompact(result, policy);
+          evaluationRecorded = true;
+          void record({ type: "evaluation", outcome: compact ? "compact" : "wait", latencyMs: result.latencyMs, ...(result.usage ? { usage: result.usage } : {}) });
           lastDecision = { at: now(), action: compact ? "compact" : "wait", mode: compactionMode(model), providerID: model.providerID, modelID: model.id, inputTokens: view.evidence.inputTokens, answers: result.answers, latencyMs: result.latencyMs };
           if (!compact) return;
           // Persist only the checkpoint identity, not text; a reload must not repeat it.
@@ -170,11 +214,17 @@ export function createPlugin(dependencies: Dependencies = {}): Plugin.Plugin {
             // Core chooses provider-native versus OpenCode summary from model settings.
             await ctx.session.compact({ sessionID });
             counters.compactionsRequested++;
+            void record({ type: "compaction", phase: "requested", mode: compactionMode(model) });
           } catch {
             value.pending = false;
             throw new Error("Native compaction admission failed");
           }
         } catch {
+          if (evaluationStartedAt !== undefined && !evaluationRecorded) {
+            void record({ type: "evaluation", outcome: signal.aborted ? "cancelled" : "error", latencyMs: Math.max(0, now() - evaluationStartedAt) });
+          } else if (!signal.aborted) {
+            void record({ type: "error" });
+          }
           if (!signal.aborted) {
             counters.errors++;
             lastDecision = { at: now(), action: "wait", reason: "Checkpoint evaluation or native admission failed; normal execution continues" };
@@ -191,7 +241,7 @@ export function createPlugin(dependencies: Dependencies = {}): Plugin.Plugin {
         lifetime.abort();
         for (const value of sessions.values()) value.controller?.abort();
         await events;
-        await Promise.allSettled(tasks);
+        while (tasks.size > 0) await Promise.allSettled([...tasks]);
         sessions.clear();
       };
     },

@@ -17,6 +17,7 @@ export interface Evaluation {
   readonly model: string;
   readonly answers: Readonly<Record<"boundary" | "settled" | "open_result", Answer>>;
   readonly latencyMs: number;
+  readonly usage?: { readonly inputTokens: number; readonly outputTokens: number };
 }
 
 export interface EvaluateOptions {

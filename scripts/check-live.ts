@@ -25,8 +25,10 @@ const status = await request("/api/rpc/jevpact/status", "POST") as { output: { e
 if (!status.output.enabled || !status.output.configured || !status.output.eventStreamHealthy || status.output.model !== "jev-1.14.0") throw new Error("Jev plugin is not enabled, configured, and observing events");
 const check = await request("/api/rpc/jevpact/check", "POST") as { output: { ok: boolean; model: string } };
 if (!check.output.ok || check.output.model !== "jev-1.14.0") throw new Error("Jev live diagnostic did not pass");
+const stored = await request("/api/rpc/jevpact/stats", "POST") as { output: { stats: { version: number } | null; statsStorageErrors: number } };
+if (stored.output.stats?.version !== 1 || stored.output.statsStorageErrors !== 0) throw new Error("Jev persistent statistics are unavailable");
 const models = await request("/api/model") as { data: Array<{ providerID: string; id: string; settings?: { compaction?: { type: string } } }> };
 const routes = models.data.filter((model) => model.providerID === "openai" && ["gpt-6.1-sol", "gpt-6-luna", "gpt-6.1-terra"].includes(model.id)).map((model) => ({ providerID: model.providerID, modelID: model.id, compaction: model.settings?.compaction?.type }));
 if (routes.length !== 3 || routes.some((route) => route.compaction !== "native")) throw new Error("Expected OpenAI native compaction settings were not resolved");
 const summaryRoutes = models.data.filter((model) => (model.providerID === "anthropic" && model.id === "claude-sonnet-5-5") || (model.providerID === "opencode-go" && model.id === "deepseek-v4.1-flash")).map((model) => ({ providerID: model.providerID, modelID: model.id, compaction: model.settings?.compaction?.type ?? "summary" }));
-console.log(JSON.stringify({ server: { version: info.version, pid: info.pid }, plugin: { id: plugin.id, status: plugin.state.status }, status: status.output, check: check.output, routes, summaryRoutes }, null, 2));
+console.log(JSON.stringify({ server: { version: info.version, pid: info.pid }, plugin: { id: plugin.id, status: plugin.state.status }, status: { ...status.output, ...stored.output }, check: check.output, routes, summaryRoutes }, null, 2));
