@@ -6,6 +6,7 @@ import type { OpenCodeEvent, SessionMessageInfo } from "@opencode/client";
 import { createPlugin } from "../src/plugin.ts";
 import { snapshot } from "../src/evidence.ts";
 import type { Evaluation, Evidence } from "../src/types.ts";
+import type { StatsSnapshot } from "../src/stats-types.ts";
 
 const directory = "/test/jevpact";
 const yes = { type: "choice", choice: "yes", confidence: 0.95, probabilities: { yes: 0.95, no: 0.03, unknown: 0.02 } } as const;
@@ -27,13 +28,15 @@ async function harness(options: {
   input?: number;
   enabled?: boolean;
   judge?: (evidence: Evidence, options: { signal?: AbortSignal }) => Promise<Evaluation>;
-  storage?: Map<string, string>;
+  storage?: Map<string, unknown>;
   admissionError?: boolean;
   minRequests?: number;
+  now?: number;
+  statsStorageFailure?: "read" | "write";
 } = {}) {
   const hooks = new Map<string, (event: unknown) => Promise<void>>();
-  const methods = new Map<string, () => Promise<unknown>>();
-  const storage = options.storage ?? new Map<string, string>();
+  const methods = new Map<string, (input: unknown, call: { signal: AbortSignal }) => Promise<unknown>>();
+  const storage = options.storage ?? new Map<string, unknown>();
   const compactCalls: unknown[] = [];
   const judgments: Evidence[] = [];
   const admitted = deferred<void>();
@@ -45,8 +48,17 @@ async function harness(options: {
     options: { minRequests: options.minRequests ?? 1, cooldownMs: 0, enabled: options.enabled ?? true },
     location: { directory },
     model: { list: async () => ({ data: [model] }) },
-    storage: { get: async (key: string) => storage.get(key), set: async (key: string, value: string) => { storage.set(key, value); } },
-    rpc: { register: async (_definition: unknown, handlers: Record<string, () => Promise<unknown>>) => { for (const [name, handler] of Object.entries(handlers)) methods.set(name, handler); } },
+    storage: {
+      get: async (key: string) => {
+        if (key === "stats/v1" && options.statsStorageFailure === "read") throw new Error("private storage detail");
+        return structuredClone(storage.get(key));
+      },
+      set: async (key: string, value: unknown) => {
+        if (key === "stats/v1" && options.statsStorageFailure === "write") throw new Error("private storage detail");
+        storage.set(key, structuredClone(value));
+      },
+    },
+    rpc: { register: async (_definition: unknown, handlers: Record<string, (input: unknown, call: { signal: AbortSignal }) => Promise<unknown>>) => { for (const [name, handler] of Object.entries(handlers)) methods.set(name, handler); } },
     event: { subscribe: async function* ({ signal }: { signal: AbortSignal }) {
       const reader = stream.getReader();
       const cancel = () => { void reader.cancel(); };
@@ -61,7 +73,7 @@ async function harness(options: {
       hook: async (name: string, handler: (event: unknown) => Promise<void>) => { hooks.set(name, handler); },
     },
   };
-  const plugin = createPlugin({ apiKey: () => "test-key", now: () => 100_000, evaluate: async (evidence, call) => { judgments.push(evidence); return options.judge ? options.judge(evidence, call) : approval; } });
+  const plugin = createPlugin({ apiKey: () => "test-key", now: () => options.now ?? 100_000, evaluate: async (evidence, call) => { judgments.push(evidence); return options.judge ? options.judge(evidence, call) : approval; } });
   // The fake models the documented plugin context only; it cannot implement native compaction itself.
   const cleanup = await plugin.setup(context as unknown as Plugin.Context);
   assert.equal(typeof cleanup, "function");
@@ -73,7 +85,9 @@ async function harness(options: {
       await setImmediate();
     },
     prompt: async () => { await hooks.get("prompt")!({ sessionID: "ses_test" }); },
-    status: async () => await methods.get("status")!() as Record<string, unknown>,
+    status: async () => await methods.get("status")!({}, { signal: new AbortController().signal }) as Record<string, unknown>,
+    stats: async () => await methods.get("stats")!({}, { signal: new AbortController().signal }) as { stats: StatsSnapshot | null; statsStorageErrors: number },
+    check: async () => await methods.get("check")!({}, { signal: new AbortController().signal }) as { ok: boolean },
     emit: (type: "session.execution.succeeded" | "session.execution.interrupted" | "session.compaction.ended") => controller.enqueue({ type, location: { directory }, data: { sessionID: "ses_test", reason: type === "session.compaction.ended" ? "manual" : "user", text: "" } } as OpenCodeEvent),
     messages: (value: SessionMessageInfo[]) => { messages = value; },
     close: async () => { await cleanup!(); },
@@ -127,7 +141,7 @@ test("new user direction cancels an in-flight positive judgment", async () => {
 });
 
 test("checkpoint identity survives reload and prevents duplicate admission", async () => {
-  const storage = new Map<string, string>();
+  const storage = new Map<string, unknown>();
   const first = await harness({ storage });
   await first.context();
   assert.equal(first.compactCalls.length, 1);
@@ -287,5 +301,88 @@ test("three model requests count even when the middle request is tool-only", asy
     await app.context();
     assert.equal(app.judgments.length, 1);
     assert.deepEqual(app.compactCalls, [{ sessionID: "ses_test" }]);
+  } finally { await app.close(); }
+});
+
+test("lifetime statistics survive a fresh plugin instance and status reads are nonmutating", async () => {
+  const storage = new Map<string, unknown>();
+  const first = await harness({ storage, now: 100_000 });
+  await first.context();
+  const initial = (await first.stats()).stats!;
+  assert.equal(initial.evaluations, 1);
+  assert.equal(initial.compactDecisions, 1);
+  assert.equal(initial.compactionsRequested, 1);
+  assert.equal(initial.requestedByMode["provider-native"], 1);
+  assert.deepEqual((await first.status()).stats, initial);
+  await first.close();
+
+  const second = await harness({ storage, now: 200_000 });
+  try {
+    assert.deepEqual((await second.stats()).stats, initial);
+    assert.deepEqual((await second.stats()).stats, initial);
+    await second.context();
+    const restored = (await second.stats()).stats!;
+    assert.equal(restored.startedAt, initial.startedAt);
+    assert.equal(restored.evaluations, 1);
+    assert.equal(restored.compactionsRequested, 1);
+    assert.equal(restored.skips.duplicate, 1);
+    assert.equal(restored.updatedAt, 200_000);
+  } finally { await second.close(); }
+});
+
+test("diagnostic usage is counted without inflating real checkpoint evaluations", async () => {
+  const app = await harness({ judge: async () => ({ ...approval, latencyMs: 23, usage: { inputTokens: 512, outputTokens: 17 } }) });
+  try {
+    assert.equal((await app.check()).ok, true);
+    const diagnostic = (await app.stats()).stats!;
+    assert.equal(diagnostic.diagnostics, 1);
+    assert.equal(diagnostic.evaluations, 0);
+    assert.equal(diagnostic.compactionsRequested, 0);
+    assert.deepEqual(diagnostic.usage, { samples: 1, inputTokens: 512, outputTokens: 17 });
+    await app.context();
+    const combined = (await app.stats()).stats!;
+    assert.equal(combined.diagnostics, 1);
+    assert.equal(combined.evaluations, 1);
+    assert.deepEqual(combined.usage, { samples: 2, inputTokens: 1_024, outputTokens: 34 });
+    assert.deepEqual(combined.latency, { samples: 2, totalMs: 46, maxMs: 23 });
+  } finally { await app.close(); }
+});
+
+test("statistics storage failures cannot prevent a valid native compaction admission", async () => {
+  for (const statsStorageFailure of ["read", "write"] as const) {
+    const app = await harness({ statsStorageFailure });
+    try {
+      await app.context();
+      assert.deepEqual(app.compactCalls, [{ sessionID: "ses_test" }]);
+      const status = await app.status();
+      assert.ok((status.statsStorageErrors as number) > 0);
+      if (statsStorageFailure === "read") assert.equal(status.stats, null);
+      assert.equal(status.compactionsRequested, 1);
+      assert.ok(!JSON.stringify(status).includes("private storage detail"));
+    } finally { await app.close(); }
+  }
+});
+
+test("cancelled evaluations and native completion events remain distinct durable statistics", async () => {
+  const started = deferred<void>();
+  const result = deferred<Evaluation>();
+  const app = await harness({ judge: async () => { started.resolve(); return result.promise; } });
+  try {
+    const pending = app.context();
+    await started.promise;
+    await app.prompt();
+    result.resolve(approval);
+    await pending;
+    const cancelled = (await app.stats()).stats!;
+    assert.equal(cancelled.evaluations, 1);
+    assert.equal(cancelled.cancelledEvaluations, 1);
+    assert.equal(cancelled.compactDecisions, 0);
+    assert.equal(cancelled.compactionsRequested, 0);
+    app.emit("session.compaction.ended");
+    await setImmediate();
+    const observed = (await app.stats()).stats!;
+    assert.equal(observed.compactionsCompleted, 1);
+    assert.equal(observed.compactionsRequested, 0);
+    assert.ok(!JSON.stringify([...app.storage.values()]).includes("Implementation is complete"));
   } finally { await app.close(); }
 });

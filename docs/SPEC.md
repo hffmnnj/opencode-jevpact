@@ -13,6 +13,19 @@ compaction for the user's configured OpenAI models, OpenCode-native summarizatio
 ## Not doing
 No replacement summarizer, desktop controller, service, private Codex interfaces,
 synthetic continuation prompts, credential copies, or OpenCode restarts.
+Stats use native plugin storage only: no telemetry service, transcript archive,
+credentials, estimated savings, dashboard, or reset/delete endpoint.
+
+## Persistent statistics
+Keep lifetime totals shared across locations and reloads, with collection timestamps,
+checkpoint outcomes, skip reasons, errors, requested versus observed native compactions,
+requested routes, request latency, and validated TypeSafe token usage when supplied.
+Keep diagnostics separate from real checkpoint evaluations. Existing volatile counters
+are not historical records; durable collection starts with this version.
+Expose read-only `jevpact/stats` and include the same aggregate in `jevpact/status`.
+Statistics failures must never block normal execution or alter checkpoint decisions.
+Check persistence across reload, concurrent updates without lost increments, optional
+usage validation, privacy allow-lists, and unchanged compaction behavior.
 
 ## Acceptance checks
 1. A real authenticated TypeSafe call returns model jev-1.14.0 and valid choice distributions.

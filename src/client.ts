@@ -45,6 +45,10 @@ function unit(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
 }
 
+function tokenCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
 function invalid(): never {
   throw new Error("Invalid Jev response");
 }
@@ -116,9 +120,13 @@ export async function evaluate(evidence: Evidence, options: EvaluateOptions): Pr
   let parsed: unknown;
   try { parsed = JSON.parse(text); } catch { invalid(); }
   if (!record(parsed) || parsed.model !== MODEL || !record(parsed.answers) || Object.keys(parsed.answers).length !== names.length || !names.every((key) => Object.hasOwn(parsed.answers as object, key))) invalid();
+  const usage = record(parsed.usage) && tokenCount(parsed.usage.input_tokens) && tokenCount(parsed.usage.output_tokens)
+    ? { inputTokens: parsed.usage.input_tokens, outputTokens: parsed.usage.output_tokens }
+    : undefined;
   return {
     model: MODEL,
     answers: { boundary: answer(parsed.answers.boundary), settled: answer(parsed.answers.settled), open_result: answer(parsed.answers.open_result) },
     latencyMs: Math.round(performance.now() - started),
+    ...(usage ? { usage } : {}),
   };
 }
