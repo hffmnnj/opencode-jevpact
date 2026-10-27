@@ -30,6 +30,12 @@ Keep diagnostics separate from real checkpoint evaluations. Existing volatile co
 are not historical records; durable collection starts with this version.
 Expose read-only `jevpact/stats` and include the same aggregate in `jevpact/status`.
 Statistics failures must never block normal execution or alter checkpoint decisions.
+Add bounded persistent provider/model aggregates for real evaluations, decision
+outcomes, admitted requests by route, latency and optional Jev usage. Detail
+collection has its own start timestamp; old totals remain unassigned, never
+backfilled by guessing. Diagnostics stay global and observed native completions
+are not attributed to Jev or a model without evidence. No transcript, session
+identity, score history, or extra hosted calls are needed for these aggregates.
 Check persistence across reload, concurrent updates without lost increments, optional
 usage validation, privacy allow-lists, and unchanged compaction behavior.
 
