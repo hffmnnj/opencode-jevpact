@@ -1,0 +1,201 @@
+import { Plugin, Rpc } from "@opencode/plugin";
+import type { ModelInfo } from "@opencode/client";
+import { evaluate, MODEL } from "./client.ts";
+import { snapshot } from "./evidence.ts";
+import { eligible, parsePolicy, shouldCompact } from "./policy.ts";
+import type { Evaluation, Evidence } from "./types.ts";
+
+const emptyInput = { type: "object", properties: {}, additionalProperties: false } as const;
+const rpc = Rpc.define({
+  id: "jevpact",
+  methods: { status: { input: emptyInput, output: { type: "object" } }, check: { input: emptyInput, output: { type: "object" } } },
+  events: {},
+});
+
+interface SessionState {
+  requests: number;
+  baselineTokens: number;
+  initialized: boolean;
+  lastEvaluationAt: number;
+  lastCheckpoint?: string;
+  compactionID?: string;
+  resetBaseline: boolean;
+  pending: boolean;
+  revision: number;
+  controller?: AbortController;
+}
+
+export function compactionMode(model: Pick<ModelInfo, "settings">): "provider-native" | "opencode-summary" {
+  return model.settings?.compaction?.type === "native" ? "provider-native" : "opencode-summary";
+}
+
+export interface Dependencies {
+  readonly evaluate?: (evidence: Evidence, options: { apiKey: string; signal?: AbortSignal }) => Promise<Evaluation>;
+  readonly apiKey?: () => string | undefined;
+  readonly now?: () => number;
+}
+
+export function createPlugin(dependencies: Dependencies = {}): Plugin.Plugin {
+  return Plugin.define({
+    id: "jevpact",
+    async setup(ctx) {
+      const policy = parsePolicy(ctx.options);
+      const enabled = ctx.options.enabled !== false;
+      const key = dependencies.apiKey ?? (() => process.env.TYPESAFE_API_KEY);
+      const judge = dependencies.evaluate ?? evaluate;
+      const now = dependencies.now ?? Date.now;
+      const lifetime = new AbortController();
+      const sessions = new Map<string, SessionState>();
+      const tasks = new Set<Promise<void>>();
+      const counters = { evaluations: 0, compactionsRequested: 0, compactionsCompleted: 0, errors: 0 };
+      let lastDecision: Record<string, unknown> | null = null;
+      let lastSkipReason: string | null = null;
+      let eventStreamHealthy = false;
+
+      function state(sessionID: string): SessionState {
+        let value = sessions.get(sessionID);
+        if (!value) {
+          value = { requests: 0, baselineTokens: 0, initialized: false, lastEvaluationAt: 0, resetBaseline: false, pending: false, revision: 0 };
+          sessions.set(sessionID, value);
+        }
+        return value;
+      }
+
+      function invalidate(sessionID: string) {
+        const value = sessions.get(sessionID);
+        if (!value) return;
+        value.revision++;
+        value.controller?.abort();
+      }
+
+      function launch(sessionID: string, model?: { providerID: string; id: string }) {
+        const task = consider(sessionID, model);
+        tasks.add(task);
+        void task.finally(() => tasks.delete(task)).catch(() => {});
+      }
+
+      // Stops and new controls invalidate in-flight judgments; never invent a resume.
+      const events = (async () => {
+        try {
+          const stream = ctx.event.subscribe({ signal: lifetime.signal });
+          eventStreamHealthy = true;
+          for await (const event of stream) {
+            if (event.location && event.location.directory !== ctx.location.directory) continue;
+            if (event.type === "session.inbox.enqueued" || event.type === "session.step.started" || event.type === "session.execution.interrupted" || event.type === "session.execution.failed") invalidate(event.data.sessionID);
+            if (event.type === "session.execution.succeeded") {
+              // Do not block event consumption: a new user prompt must cancel this judgment.
+              launch(event.data.sessionID);
+            }
+            if (event.type === "session.compaction.started") {
+              invalidate(event.data.sessionID);
+              state(event.data.sessionID).pending = true;
+            }
+            if (event.type === "session.compaction.ended" || event.type === "session.compaction.failed") {
+              const value = state(event.data.sessionID);
+              value.pending = false;
+              if (event.type === "session.compaction.ended") {
+                value.resetBaseline = true;
+                value.requests = 0;
+                counters.compactionsCompleted++;
+              }
+            }
+            if (event.type === "session.deleted") {
+              invalidate(event.data.sessionID);
+              sessions.delete(event.data.sessionID);
+            }
+          }
+        } catch {
+          if (!lifetime.signal.aborted) counters.errors++;
+        } finally {
+          eventStreamHealthy = false;
+          for (const value of sessions.values()) value.controller?.abort();
+        }
+      })();
+
+      await ctx.rpc.register(rpc, {
+        status: async () => ({ enabled, configured: Boolean(key()?.trim()), model: MODEL, location: ctx.location.directory, policy, eventStreamHealthy, ...counters, lastDecision, lastSkipReason }),
+        check: async (_input, call) => {
+          try {
+            const result = await judge({ excerpt: "User: Implement the parser, then deploy it.\nAssistant: The parser implementation is complete. All parser tests passed and their results confirm the expected behavior. The implementation phase is finished. The next distinct phase is deployment.", inputTokens: 0, contextWindow: 0 }, { apiKey: key() ?? "", signal: AbortSignal.any([lifetime.signal, call.signal]) });
+            return { ok: true, ...result, wouldCompact: shouldCompact(result, policy) };
+          } catch {
+            return { ok: false, model: MODEL, error: "Jev diagnostic failed; verify key availability and TypeSafe connectivity" };
+          }
+        },
+      });
+
+      async function consider(sessionID: string, ref?: { providerID: string; id: string }) {
+        if (!enabled || !key()?.trim() || lifetime.signal.aborted || !eventStreamHealthy) return;
+        const value = state(sessionID);
+        if (value.pending || value.controller) return;
+        const controller = new AbortController();
+        value.controller = controller;
+        const signal = AbortSignal.any([lifetime.signal, controller.signal]);
+        const revision = value.revision;
+        try {
+          const session = await ctx.session.get({ sessionID });
+          if (session.location.directory !== ctx.location.directory || session.outcome === "interrupted" || session.outcome === "failed") return;
+          const selected = ref ?? session.model;
+          if (!selected) return;
+          const models = await ctx.model.list();
+          const model = models.data.find((candidate) => candidate.providerID === selected.providerID && candidate.id === selected.id);
+          if (!model) return;
+          const messages = await ctx.session.context({ sessionID });
+          const view = snapshot(messages, model.limit.context);
+          if (!view) { lastSkipReason = "No complete current-turn report, source coverage is incomplete, or newer activity is uninterpreted"; return; }
+          if (!value.initialized || view.compactionID !== value.compactionID || value.resetBaseline) {
+            value.compactionID = view.compactionID;
+            value.baselineTokens = view.baselineTokens;
+            value.initialized = true;
+            value.resetBaseline = false;
+          }
+          value.requests = view.requestsSinceCompaction;
+          if (view.checkpoint === value.lastCheckpoint) return;
+          value.lastCheckpoint = view.checkpoint;
+          if (!eligible(view.evidence, value, policy, now())) { lastSkipReason = "Below usage, growth, request-count, or cooldown threshold"; return; }
+          const marker = `checkpoint/${sessionID}`;
+          if (await ctx.storage.get(marker) === view.checkpoint) return;
+          value.lastEvaluationAt = now();
+          counters.evaluations++;
+          const result = await judge(view.evidence, { apiKey: key() ?? "", signal });
+          if (signal.aborted || revision !== value.revision || !eventStreamHealthy) { lastSkipReason = "Judgment cancelled by new direction, execution, compaction, or unload"; return; }
+          const compact = shouldCompact(result, policy);
+          lastDecision = { at: now(), action: compact ? "compact" : "wait", mode: compactionMode(model), providerID: model.providerID, modelID: model.id, inputTokens: view.evidence.inputTokens, answers: result.answers, latencyMs: result.latencyMs };
+          if (!compact) return;
+          // Persist only the checkpoint identity, not text; a reload must not repeat it.
+          await ctx.storage.set(marker, view.checkpoint);
+          if (signal.aborted || revision !== value.revision) return;
+          value.pending = true;
+          try {
+            // Core chooses provider-native versus OpenCode summary from model settings.
+            await ctx.session.compact({ sessionID });
+            counters.compactionsRequested++;
+          } catch {
+            value.pending = false;
+            throw new Error("Native compaction admission failed");
+          }
+        } catch {
+          if (!signal.aborted) {
+            counters.errors++;
+            lastDecision = { at: now(), action: "wait", reason: "Checkpoint evaluation or native admission failed; normal execution continues" };
+          }
+        } finally {
+          if (value.controller === controller) value.controller = undefined;
+        }
+      }
+
+      await ctx.session.hook("prompt", (event) => { invalidate(event.sessionID); });
+      await ctx.session.hook("context", (event) => { launch(event.sessionID, event.model); });
+
+      return async () => {
+        lifetime.abort();
+        for (const value of sessions.values()) value.controller?.abort();
+        await events;
+        await Promise.allSettled(tasks);
+        sessions.clear();
+      };
+    },
+  });
+}
+
+export default createPlugin();
