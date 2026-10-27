@@ -88,7 +88,7 @@ async function harness(options: {
     status: async () => await methods.get("status")!({}, { signal: new AbortController().signal }) as Record<string, unknown>,
     stats: async () => await methods.get("stats")!({}, { signal: new AbortController().signal }) as { stats: StatsSnapshot | null; statsStorageErrors: number },
     check: async () => await methods.get("check")!({}, { signal: new AbortController().signal }) as { ok: boolean },
-    emit: (type: "session.execution.succeeded" | "session.execution.interrupted" | "session.compaction.ended") => controller.enqueue({ type, location: { directory }, data: { sessionID: "ses_test", reason: type === "session.compaction.ended" ? "manual" : "user", text: "" } } as OpenCodeEvent),
+    emit: (type: "session.execution.succeeded" | "session.execution.interrupted" | "session.compaction.ended" | "session.synthetic") => controller.enqueue({ type, location: { directory }, data: { sessionID: "ses_test", reason: type === "session.compaction.ended" ? "manual" : "user", text: "" } } as OpenCodeEvent),
     messages: (value: SessionMessageInfo[]) => { messages = value; },
     close: async () => { await cleanup!(); },
   };
@@ -202,7 +202,7 @@ test("evidence excludes reasoning, tool bodies, system text, and attachments", (
   assert.ok(view.evidence.excerpt.includes("Build the feature"));
   assert.ok(view.evidence.excerpt.includes("implementation is complete"));
   for (const secret of ["ATTACHMENT_SECRET", "REASONING_SECRET", "TOOL_SECRET", "SYSTEM_SECRET", "CONTROLLER_SECRET"]) assert.ok(!view.evidence.excerpt.includes(secret));
-  assert.ok(view.evidence.excerpt.indexOf("Tool activity omitted") < view.evidence.excerpt.indexOf("implementation is complete"));
+  assert.ok(view.evidence.excerpt.indexOf("Earlier tool result bodies omitted") < view.evidence.excerpt.indexOf("implementation is complete"));
   assert.equal(view.evidence.inputTokens, 123_100);
 });
 
@@ -384,5 +384,51 @@ test("cancelled evaluations and native completion events remain distinct durable
     assert.equal(observed.compactionsCompleted, 1);
     assert.equal(observed.compactionsRequested, 0);
     assert.ok(!JSON.stringify([...app.storage.values()]).includes("Implementation is complete"));
+  } finally { await app.close(); }
+});
+
+test("recovered native task and moderate affirmative support can request the configured compactor", async () => {
+  const goal = "Implement and deploy the catalog, then build the client integration.";
+  const app = await harness({ judge: async (evidence) => {
+    assert.ok(evidence.excerpt.includes(goal));
+    assert.ok(!evidence.excerpt.includes("PEER_SECRET"));
+    return { ...approval, answers: { ...approval.answers, open_result: { type: "choice", choice: "no", confidence: 0.61, probabilities: { yes: 0.1, no: 0.74, unknown: 0.16 } } } };
+  } });
+  try {
+    app.messages([
+      { type: "compaction", id: "msg_compacted", status: "completed", reason: "auto", time: { created: 0 }, summary: "", native: { messages: [
+        { id: "msg_goal", role: "user", content: [{ type: "text", text: goal }] },
+        { id: "msg_peer", role: "user", metadata: { source: "opencode-cross-communication" }, content: [{ type: "text", text: "PEER_SECRET" }] },
+      ] } },
+      assistant("msg_initial", 80_000), assistant("msg_finished", 120_000),
+    ]);
+    await app.context();
+    assert.deepEqual(app.compactCalls, [{ sessionID: "ses_test" }]);
+    const decision = (await app.status()).lastDecision as Record<string, unknown>;
+    assert.equal(decision.sessionID, "ses_test");
+    assert.equal(decision.checkpointID, "msg_finished");
+    assert.equal(decision.requestSource, "native-compaction");
+    assert.deepEqual(decision.thresholds, { boundary: 0.8, supporting: 0.7, confidence: 0.5 });
+  } finally { await app.close(); }
+});
+
+test("new child result invalidates an in-flight positive checkpoint judgment", async () => {
+  const started = deferred<void>();
+  const cancelled = deferred<void>();
+  const result = deferred<Evaluation>();
+  const app = await harness({ judge: async (_evidence, call) => {
+    call.signal!.addEventListener("abort", () => cancelled.resolve(), { once: true });
+    started.resolve();
+    return result.promise;
+  } });
+  try {
+    const pending = app.context();
+    await started.promise;
+    app.emit("session.synthetic");
+    await cancelled.promise;
+    result.resolve(approval);
+    await pending;
+    assert.deepEqual(app.compactCalls, []);
+    assert.equal((await app.stats()).stats!.cancelledEvaluations, 1);
   } finally { await app.close(); }
 });

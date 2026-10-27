@@ -22,6 +22,11 @@
 - Live diagnostic recorded 910 input and 110 output tokens; after a real evaluation, totals were 6933 input and 220 output across two usage samples.
 - Verified totals and collection timestamp survive plugin configuration reloads on unchanged PID 219124; plugin enabled and stats collection errors zero.
 - Published the persistent-stats follow-up: https://github.com/hffmnnj/opencode-jevpact/pull/2.
+- Studied both running sessions. This session had useful completed-work checkpoints near 218k and 307k tokens; the latter's recorded 0.74 no-open-result support failed the blanket 0.8 cutoff.
+- Retained the 0.8 boundary bar, added a 0.7 supporting floor, and preserved explicit legacy thresholds. The recorded missed case now qualifies; negative/unknown and incidental side-answer cases still veto.
+- Recovered visible retained native task requests, separated peer traffic, labelled summary fallback, and admitted completed progress-list-only updates without relaxing external-result guards. Child-result arrivals now cancel in-flight judgments.
+- Confirmed the long session's retained task is recovered in an offline report-prefix check; peer message bodies are excluded. Earlier attractive checkpoints before activation were retrospective examples, not live-plugin failures.
+- Typecheck and all 106 tests passed. Live Jev diagnostic succeeded in 288 ms; both active locations expose the upgraded policy, preserve collection start 1793060656906, and report healthy event streams on unchanged PID 219124.
 
 ## Follow-ups
 - Observe real-workload checkpoint frequency and token cost; no efficiency gain is claimed yet.

@@ -30,7 +30,8 @@ Add one entry to the OpenCode `plugins` array:
 ```
 
 Policy fields (`minInputTokens`, `minGrowthTokens`, `minRequests`,
-`minProbability`, `minConfidence`, `cooldownMs`) go inside `options`.
+`minProbability`, `minSupportingProbability`, `minConfidence`,
+`cooldownMs`) go inside `options`.
 Unset fields use the README defaults. OpenCode native hot reload loads the
 plugin; do not restart any service.
 
@@ -53,7 +54,9 @@ nothing in these commands prints a secret.
 
 The script uses `OPENCODE_SERVER_PASSWORD` already in the environment for
 OpenCode HTTP Basic authentication and never prints it. It also prints the
-running server PID and resolved OpenAI model compaction settings.
+running server PID and resolved OpenAI model compaction settings. When
+diagnosing why a checkpoint waited, inspect `status.lastDecision` request
+source and applied thresholds; it is in-memory only.
 
 ## 4. Persistence verification
 

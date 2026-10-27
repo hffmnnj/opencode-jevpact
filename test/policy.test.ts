@@ -170,11 +170,73 @@ describe("shouldCompact semantic approval", () => {
     assert.equal(shouldCompact(atThreshold, options), true);
   });
 
-  it("shouldCompact_lowSelectedProbability_vetoes", () => {
-    const uncertain = evaluation({
-      settled: answer("yes", 0.9, options.minProbability - 0.01),
+  it("shouldCompact_completedWorkWithModerateOpenResultSupport_qualifies", () => {
+    const completedWork = evaluation({
+      boundary: answer("yes", 0.95, 0.97),
+      settled: answer("yes", 0.86, 0.91),
+      open_result: answer("no", 0.61, 0.74),
     });
-    assert.equal(shouldCompact(uncertain, options), false);
+    assert.equal(shouldCompact(completedWork, options), true);
+  });
+
+  it("shouldCompact_supportAtExactFloor_qualifies", () => {
+    const atSupportFloor = evaluation({
+      boundary: answer("yes", options.minConfidence, options.minProbability),
+      settled: answer(
+        "yes",
+        options.minConfidence,
+        options.minSupportingProbability,
+      ),
+      open_result: answer(
+        "no",
+        options.minConfidence,
+        options.minSupportingProbability,
+      ),
+    });
+    assert.equal(shouldCompact(atSupportFloor, options), true);
+  });
+
+  it("shouldCompact_lowSelectedProbability_vetoes", () => {
+    const uncertainSupport = evaluation({
+      settled: answer("yes", 0.9, options.minSupportingProbability - 0.01),
+    });
+    assert.equal(shouldCompact(uncertainSupport, options), false);
+  });
+
+  it("shouldCompact_lowBoundaryProbability_vetoes", () => {
+    const weakBoundary = evaluation({
+      boundary: answer("yes", 0.9, options.minProbability - 0.01),
+      settled: answer("yes", 0.9, 0.95),
+      open_result: answer("no", 0.9, 0.95),
+    });
+    assert.equal(shouldCompact(weakBoundary, options), false);
+  });
+
+  it("shouldCompact_moderateSupportBelowFloor_vetoes", () => {
+    const thinSupport = evaluation({
+      boundary: answer("yes", 0.95, 0.97),
+      settled: answer("yes", 0.86, 0.91),
+      open_result: answer("no", 0.61, options.minSupportingProbability - 0.01),
+    });
+    assert.equal(shouldCompact(thinSupport, options), false);
+  });
+
+  it("shouldCompact_sideAnswerWithoutBoundary_vetoes", () => {
+    const sideAnswer = evaluation({
+      boundary: answer("no", 0.25, 0.5),
+      settled: answer("yes", 0.91, 0.94),
+      open_result: answer("no", 0.8, 0.87),
+    });
+    assert.equal(shouldCompact(sideAnswer, options), false);
+  });
+
+  it("shouldCompact_unsettledSessionWithUnknownOpenResult_vetoes", () => {
+    const longSession = evaluation({
+      boundary: answer("no", 0.2, 0.47),
+      settled: answer("no", 0.61, 0.74),
+      open_result: answer("unknown", 0.55, 0.7),
+    });
+    assert.equal(shouldCompact(longSession, options), false);
   });
 
   it("shouldCompact_lowConfidence_vetoes", () => {
@@ -182,6 +244,14 @@ describe("shouldCompact semantic approval", () => {
       boundary: answer("yes", options.minConfidence - 0.01, 0.95),
     });
     assert.equal(shouldCompact(unsure, options), false);
+    const unsureSupport = evaluation({
+      settled: answer("yes", options.minConfidence - 0.01, 0.95),
+    });
+    assert.equal(shouldCompact(unsureSupport, options), false);
+    const unsureOpen = evaluation({
+      open_result: answer("no", options.minConfidence - 0.01, 0.95),
+    });
+    assert.equal(shouldCompact(unsureOpen, options), false);
   });
 
   it("shouldCompact_unknownNever_qualifies", () => {
@@ -240,6 +310,26 @@ describe("parsePolicy", () => {
     });
   });
 
+  it("parsePolicy_explicitBoundaryFloor_preservedForSupportUnlessOverridden", () => {
+    assert.deepEqual(parsePolicy({ minProbability: 0.9 }), {
+      ...DEFAULT_POLICY,
+      minProbability: 0.9,
+      minSupportingProbability: 0.9,
+    });
+    assert.deepEqual(
+      parsePolicy({ minProbability: 0.9, minSupportingProbability: 0.6 }),
+      {
+        ...DEFAULT_POLICY,
+        minProbability: 0.9,
+        minSupportingProbability: 0.6,
+      },
+    );
+    assert.deepEqual(parsePolicy({ minSupportingProbability: 0.6 }), {
+      ...DEFAULT_POLICY,
+      minSupportingProbability: 0.6,
+    });
+  });
+
   it("parsePolicy_invalidValues_rejected", () => {
     const invalid: Array<Record<string, unknown>> = [
       { minInputTokens: -1 },
@@ -254,6 +344,10 @@ describe("parsePolicy", () => {
       { minProbability: -0.1 },
       { minProbability: 1.1 },
       { minProbability: Number.NaN },
+      { minSupportingProbability: -0.1 },
+      { minSupportingProbability: 1.1 },
+      { minSupportingProbability: Number.NaN },
+      { minSupportingProbability: "0.7" },
       { minConfidence: -0.1 },
       { minConfidence: 1.1 },
       { cooldownMs: -1 },
