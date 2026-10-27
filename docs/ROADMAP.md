@@ -1,9 +1,12 @@
 # Roadmap
 
-## In progress
-- Conservative hourly live-session R&D until 2026-10-27 06:30 America/Phoenix. Baseline at 18:41: 10 evaluations, 2 requests, 4 observed native completions, zero errors; TypeSafe usage 33921 input / 1320 output across 12 samples including 2 diagnostics.
-- Latest observation 19:44: 16 evaluations (4 compact / 12 wait), 4 summary-mode admissions, 7 observed native completions, zero errors. Usage 55572 input / 2090 output across 19 samples, including 3 diagnostics. Both locations healthy; collection timestamp unchanged.
-- No tuning at 19:44: current-session 101.6k checkpoint was unsettled; long session had a useful 97.5k boundary below the 100k floor, then external-result work to 187.8k. Native long-session compaction occurred separately, not attributed to Jev. One near-floor example is insufficient calibration evidence. Continue native hourly sleeps to the deadline.
+## Overnight result
+- Observation ended at the requested 2026-10-27 06:30 America/Phoenix deadline after native hourly sleeps and a shortened final sleep. No further timer or tuning is running.
+- At 06:30: 99 evaluations (39 compact / 60 wait), 39 admissions (3 provider-native / 36 summary), 48 globally observed native completions, zero evaluation/compaction/storage errors. Both locations healthy; original collection timestamp retained. Completions include core/manual activity and are not all attributed to Jev.
+- Since the 18:41 baseline: 89 evaluations and 37 admissions; Jev usage increased by 256871 input / 9900 output tokens, including one diagnostic. Lifetime usage is 290792 input / 11220 output across 102 samples (3 diagnostics); mean latency 172 ms, maximum 569 ms. Monetary cost and net token savings are not measured.
+- Model-attributed requests: Sol, Terra and Luna 1 provider-native each; Muse contributor through opencode-go 6 summary and through muse 16 summary; DeepSeek Flash through opencode-go 5 summary. Nine earlier summary requests remain unassigned rather than guessed.
+- Representative completed publication/review/verification reports qualified; ongoing monitoring and reports with unresolved external work waited. This session's Jev-triggered native compaction was verified at 133037 tokens. The long session's core-native compactions remain separate; its final context was around 58k at an SSH-authorization blocker. Later hourly evidence did not justify more scoring changes. This is sampled observation, not proof of perfect calibration or measured efficiency gains.
+- Final local verification: `npm run typecheck && npm test` passed, 122 tests / 10 suites, zero failures. Upgrades remain live and published in PR #3; no server restart or forced session compaction was used.
 
 ## Done
 - Inspected JevPact and native V2 plugin documentation.
