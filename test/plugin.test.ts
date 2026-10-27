@@ -445,3 +445,32 @@ test("truncated report never reaches hosted Jev or compaction", async () => {
     assert.deepEqual(status.lastEvidenceSkip, { sessionID: "ses_test", reason: "incomplete-report" });
   } finally { await app.close(); }
 });
+
+test("settled Terra evaluation and requested compaction carry per-model attribution", async () => {
+  const app = await harness();
+  try {
+    await app.context();
+    assert.deepEqual(app.compactCalls, [{ sessionID: "ses_test" }]);
+    const snapshot = (await app.stats()).stats!;
+    assert.equal(snapshot.evaluations, 1);
+    assert.equal(snapshot.compactionsRequested, 1);
+    assert.deepEqual(snapshot.modelDetails!.models, [{
+      providerID: "openai",
+      modelID: "gpt-6.1-terra",
+      evaluations: 1,
+      compactDecisions: 1,
+      waitDecisions: 0,
+      cancelledEvaluations: 0,
+      evaluationErrors: 0,
+      compactionsRequested: 1,
+      requestedByMode: { "provider-native": 1, "opencode-summary": 0 },
+      latency: { samples: 1, totalMs: 1, maxMs: 1 },
+      usage: { samples: 0, inputTokens: 0, outputTokens: 0 },
+    }]);
+    // Everything observed is attributed: no unassigned remainder.
+    const assigned = snapshot.modelDetails!.models.reduce((sum, row) => sum + row.evaluations, 0);
+    assert.equal(snapshot.evaluations - assigned, 0);
+    const requested = snapshot.modelDetails!.models.reduce((sum, row) => sum + row.compactionsRequested, 0);
+    assert.equal(snapshot.compactionsRequested - requested, 0);
+  } finally { await app.close(); }
+});

@@ -91,6 +91,24 @@ error strings, session content, credentials, or arbitrary metadata stored.
 Read it via `POST /api/rpc/jevpact/stats` with body `{"input":{}}` using
 the server's OpenCode authentication, or `node scripts/check-live.ts`.
 
+### Model breakdown
+
+`stats.modelDetails` adds its own `startedAt` and up to 128 provider/model
+rows. Each row reports real evaluation outcomes, admitted compaction requests
+by route, Jev latency, and validated Jev token usage. Usage measures the
+classifier call, not the primary model or the compaction operation.
+
+Old totals are preserved without backfilling model identities. The difference
+between global evaluation/request counts and the sum of their model rows is
+unassigned history (or an identity beyond the bounded row limit). Global
+usage and latency additionally include diagnostics. Detail starts on the first
+model-attributed event; it can be absent until then. Diagnostics remain global
+and do not inflate any model row. Observed native completions remain global:
+an admitted request is not proof of completed compaction.
+
+Only validated provider/model identifiers and numeric aggregates are added;
+no session IDs, transcripts, or individual score histories are stored.
+
 ## What carries over from JevPact
 
 Source review covered its controller state machine, timing context, transcript, policy, Jev rubrics, and tests, not just the README.

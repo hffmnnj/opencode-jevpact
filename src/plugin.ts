@@ -170,6 +170,7 @@ export function createPlugin(dependencies: Dependencies = {}): Plugin.Plugin {
         const revision = value.revision;
         let evaluationStartedAt: number | undefined;
         let evaluationRecorded = false;
+        let resolvedModel: { providerID: string; modelID: string } | undefined;
         try {
           const session = await ctx.session.get({ sessionID });
           if (session.location.directory !== ctx.location.directory || session.outcome === "interrupted" || session.outcome === "failed") return;
@@ -178,6 +179,7 @@ export function createPlugin(dependencies: Dependencies = {}): Plugin.Plugin {
           const models = await ctx.model.list();
           const model = models.data.find((candidate) => candidate.providerID === selected.providerID && candidate.id === selected.id);
           if (!model) return;
+          resolvedModel = { providerID: model.providerID, modelID: model.id };
           const messages = await ctx.session.context({ sessionID });
           const selectedEvidence = selectSnapshot(messages, model.limit.context);
           if (selectedEvidence.type === "skip") {
@@ -205,13 +207,13 @@ export function createPlugin(dependencies: Dependencies = {}): Plugin.Plugin {
           const result = await judge(view.evidence, { apiKey: key() ?? "", signal });
           if (signal.aborted || revision !== value.revision || !eventStreamHealthy) {
             evaluationRecorded = true;
-            void record({ type: "evaluation", outcome: "cancelled", latencyMs: result.latencyMs, ...(result.usage ? { usage: result.usage } : {}) });
+            void record({ type: "evaluation", outcome: "cancelled", latencyMs: result.latencyMs, ...(result.usage ? { usage: result.usage } : {}), ...(resolvedModel ? { model: resolvedModel } : {}) });
             lastSkipReason = "Judgment cancelled by new direction, execution, compaction, or unload";
             return;
           }
           const compact = shouldCompact(result, policy);
           evaluationRecorded = true;
-          void record({ type: "evaluation", outcome: compact ? "compact" : "wait", latencyMs: result.latencyMs, ...(result.usage ? { usage: result.usage } : {}) });
+          void record({ type: "evaluation", outcome: compact ? "compact" : "wait", latencyMs: result.latencyMs, ...(result.usage ? { usage: result.usage } : {}), ...(resolvedModel ? { model: resolvedModel } : {}) });
           lastDecision = { at: now(), sessionID, checkpointID: view.checkpoint, requestSource: view.requestSource, thresholds: { boundary: policy.minProbability, supporting: policy.minSupportingProbability, confidence: policy.minConfidence }, action: compact ? "compact" : "wait", mode: compactionMode(model), providerID: model.providerID, modelID: model.id, inputTokens: view.evidence.inputTokens, answers: result.answers, latencyMs: result.latencyMs };
           if (!compact) return;
           // Persist only the checkpoint identity, not text; a reload must not repeat it.
@@ -222,14 +224,14 @@ export function createPlugin(dependencies: Dependencies = {}): Plugin.Plugin {
             // Core chooses provider-native versus OpenCode summary from model settings.
             await ctx.session.compact({ sessionID });
             counters.compactionsRequested++;
-            void record({ type: "compaction", phase: "requested", mode: compactionMode(model) });
+            void record({ type: "compaction", phase: "requested", mode: compactionMode(model), ...(resolvedModel ? { model: resolvedModel } : {}) });
           } catch {
             value.pending = false;
             throw new Error("Native compaction admission failed");
           }
         } catch {
           if (evaluationStartedAt !== undefined && !evaluationRecorded) {
-            void record({ type: "evaluation", outcome: signal.aborted ? "cancelled" : "error", latencyMs: Math.max(0, now() - evaluationStartedAt) });
+            void record({ type: "evaluation", outcome: signal.aborted ? "cancelled" : "error", latencyMs: Math.max(0, now() - evaluationStartedAt), ...(resolvedModel ? { model: resolvedModel } : {}) });
           } else if (!signal.aborted) {
             void record({ type: "error" });
           }
