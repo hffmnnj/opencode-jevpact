@@ -1,8 +1,5 @@
 # Roadmap
 
-## In progress
-- Publish the verified topic branch and PR.
-
 ## Done
 - Inspected JevPact and native V2 plugin documentation.
 - Verified the existing key is present in both the tool and main-server environments.
@@ -19,6 +16,7 @@
 - Enabled globally; live status reports configured, active, observing events, and zero errors on the unchanged main server PID.
 - Final live Jev diagnostic returned valid jev-1.14.0 answers in 126 ms; resolved Terra/Sol/Luna routes are native, Anthropic/Go examples are summary.
 - Confirmed native auto compaction, its 28000-token buffer, and background compaction remain unchanged.
+- Published the implementation on `feat/jev-checkpoints`: https://github.com/hffmnnj/opencode-jevpact/pull/1 (open, ready for review).
 
 ## Follow-ups
 - Observe real-workload checkpoint frequency and token cost; no efficiency gain is claimed yet.
