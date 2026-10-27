@@ -13,6 +13,8 @@ Recover visible task requests retained by native compaction without promoting pe
 traffic to user direction. Label summary-only context explicitly. Only completed
 progress-list updates may follow a candidate report; other tool results still need
 interpretation. New user or child activity cancels an in-flight judgment.
+Provider-truncated, filtered, errored, unknown-finish, or still-streaming reports
+are not completed checkpoints. Require explicit successful finish and completion.
 
 ## Not doing
 No replacement summarizer, desktop controller, service, private Codex interfaces,

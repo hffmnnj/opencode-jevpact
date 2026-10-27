@@ -14,7 +14,7 @@ const no = { type: "choice", choice: "no", confidence: 0.95, probabilities: { ye
 const approval: Evaluation = { model: "jev-1.14.0", answers: { boundary: yes, settled: yes, open_result: no }, latencyMs: 1 };
 
 function assistant(id = "msg_finished", input = 120_000): SessionMessageInfo {
-  return { type: "assistant", id, agent: "build", model: { providerID: "openai", id: "gpt-6.1-terra" }, content: [{ type: "text", text: "Implementation is complete. Tests passed. Next I will deploy." }], tokens: { input, output: 100, reasoning: 0, cache: { read: 3_000, write: 0 } }, time: { created: 1, completed: 2 } };
+  return { type: "assistant", id, agent: "build", model: { providerID: "openai", id: "gpt-6.1-terra" }, content: [{ type: "text", text: "Implementation is complete. Tests passed. Next I will deploy." }], tokens: { input, output: 100, reasoning: 0, cache: { read: 3_000, write: 0 } }, time: { created: 1, completed: 2 }, finish: "stop" };
 }
 
 function deferred<T>() {
@@ -430,5 +430,18 @@ test("new child result invalidates an in-flight positive checkpoint judgment", a
     await pending;
     assert.deepEqual(app.compactCalls, []);
     assert.equal((await app.stats()).stats!.cancelledEvaluations, 1);
+  } finally { await app.close(); }
+});
+
+test("truncated report never reaches hosted Jev or compaction", async () => {
+  const app = await harness();
+  try {
+    const truncated = { ...assistant("msg_finished", 120_000), finish: "length" } as unknown as SessionMessageInfo;
+    app.messages([assistant("msg_initial", 80_000), truncated]);
+    await app.context();
+    assert.deepEqual(app.judgments, []);
+    assert.deepEqual(app.compactCalls, []);
+    const status = await app.status() as Record<string, unknown>;
+    assert.deepEqual(status.lastEvidenceSkip, { sessionID: "ses_test", reason: "incomplete-report" });
   } finally { await app.close(); }
 });
