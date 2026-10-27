@@ -55,7 +55,23 @@ The script uses `OPENCODE_SERVER_PASSWORD` already in the environment for
 OpenCode HTTP Basic authentication and never prints it. It also prints the
 running server PID and resolved OpenAI model compaction settings.
 
-## 4. Disable or roll back
+## 4. Persistence verification
+
+Statistics are lifetime aggregates in plugin storage key `stats/v1`,
+shared across locations. To verify persistence, from the repository:
+
+1. Read stats (`jevpact/stats`, or `status.stats` in the check-live output).
+2. Call `check` once.
+3. Read stats again: diagnostic and usage/latency totals move, nothing resets.
+4. Reload this plugin through a normal configuration change and restore its
+   original enabled setting. Read stats again: totals are nondecreasing and
+   the post-check `startedAt` is stable. No server restart is needed.
+
+If saved totals cannot be read, `stats` is `null`; do not treat that as zeros.
+Failed writes raise `statsStorageErrors` and may leave gaps in totals. Normal
+compaction behavior continues in both cases.
+
+## 5. Disable or roll back
 
 - Disable: set `options.enabled` to `false`, or remove just this plugin's
   entry from the `plugins` array.
@@ -63,7 +79,7 @@ running server PID and resolved OpenAI model compaction settings.
   pressure fallback keeps working with or without this plugin.
 - Hot reload applies the removal; no service restart.
 
-## 5. Safety rules
+## 6. Safety rules
 
 - Never commit, print, or paste `TYPESAFE_API_KEY`, tokens, or auth file
   contents. No command here outputs a secret.
