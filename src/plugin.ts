@@ -1,7 +1,8 @@
 import { Plugin, Rpc } from "@opencode/plugin";
 import type { ModelInfo } from "@opencode/client";
 import { evaluate, MODEL } from "./client.ts";
-import { snapshot } from "./evidence.ts";
+import { selectSnapshot } from "./evidence.ts";
+import type { EvidenceSkipReason } from "./evidence.ts";
 import { eligible, parsePolicy, shouldCompact } from "./policy.ts";
 import type { Evaluation, Evidence } from "./types.ts";
 import { createStats } from "./stats.ts";
@@ -58,6 +59,7 @@ export function createPlugin(dependencies: Dependencies = {}): Plugin.Plugin {
       const counters = { evaluations: 0, compactionsRequested: 0, compactionsCompleted: 0, errors: 0 };
       let lastDecision: Record<string, unknown> | null = null;
       let lastSkipReason: string | null = null;
+      let lastEvidenceSkip: { sessionID: string; reason: EvidenceSkipReason } | null = null;
       let eventStreamHealthy = false;
 
       function record(event: StatsEvent): Promise<void> {
@@ -105,7 +107,7 @@ export function createPlugin(dependencies: Dependencies = {}): Plugin.Plugin {
           eventStreamHealthy = true;
           for await (const event of stream) {
             if (event.location && event.location.directory !== ctx.location.directory) continue;
-            if (event.type === "session.inbox.enqueued" || event.type === "session.step.started" || event.type === "session.execution.interrupted" || event.type === "session.execution.failed") invalidate(event.data.sessionID);
+            if (event.type === "session.inbox.enqueued" || event.type === "session.synthetic" || event.type === "session.step.started" || event.type === "session.execution.interrupted" || event.type === "session.execution.failed") invalidate(event.data.sessionID);
             if (event.type === "session.execution.succeeded") {
               // Do not block event consumption: a new user prompt must cancel this judgment.
               launch(event.data.sessionID);
@@ -143,7 +145,7 @@ export function createPlugin(dependencies: Dependencies = {}): Plugin.Plugin {
       })();
 
       await ctx.rpc.register(rpc, {
-        status: async () => ({ enabled, configured: Boolean(key()?.trim()), model: MODEL, location: ctx.location.directory, policy, eventStreamHealthy, ...counters, lastDecision, lastSkipReason, ...await readStats() }),
+        status: async () => ({ enabled, configured: Boolean(key()?.trim()), model: MODEL, location: ctx.location.directory, policy, eventStreamHealthy, ...counters, lastDecision, lastSkipReason, lastEvidenceSkip, ...await readStats() }),
         stats: async () => await readStats(),
         check: async (_input, call) => {
           const started = now();
@@ -177,8 +179,14 @@ export function createPlugin(dependencies: Dependencies = {}): Plugin.Plugin {
           const model = models.data.find((candidate) => candidate.providerID === selected.providerID && candidate.id === selected.id);
           if (!model) return;
           const messages = await ctx.session.context({ sessionID });
-          const view = snapshot(messages, model.limit.context);
-          if (!view) { lastSkipReason = "No complete current-turn report, source coverage is incomplete, or newer activity is uninterpreted"; void record({ type: "skip", reason: "evidence" }); return; }
+          const selectedEvidence = selectSnapshot(messages, model.limit.context);
+          if (selectedEvidence.type === "skip") {
+            lastEvidenceSkip = { sessionID, reason: selectedEvidence.reason };
+            lastSkipReason = `Evidence checkpoint skipped: ${selectedEvidence.reason}`;
+            void record({ type: "skip", reason: "evidence" });
+            return;
+          }
+          const view = selectedEvidence.snapshot;
           if (!value.initialized || view.compactionID !== value.compactionID || value.resetBaseline) {
             value.compactionID = view.compactionID;
             value.baselineTokens = view.baselineTokens;
@@ -204,7 +212,7 @@ export function createPlugin(dependencies: Dependencies = {}): Plugin.Plugin {
           const compact = shouldCompact(result, policy);
           evaluationRecorded = true;
           void record({ type: "evaluation", outcome: compact ? "compact" : "wait", latencyMs: result.latencyMs, ...(result.usage ? { usage: result.usage } : {}) });
-          lastDecision = { at: now(), action: compact ? "compact" : "wait", mode: compactionMode(model), providerID: model.providerID, modelID: model.id, inputTokens: view.evidence.inputTokens, answers: result.answers, latencyMs: result.latencyMs };
+          lastDecision = { at: now(), sessionID, checkpointID: view.checkpoint, requestSource: view.requestSource, thresholds: { boundary: policy.minProbability, supporting: policy.minSupportingProbability, confidence: policy.minConfidence }, action: compact ? "compact" : "wait", mode: compactionMode(model), providerID: model.providerID, modelID: model.id, inputTokens: view.evidence.inputTokens, answers: result.answers, latencyMs: result.latencyMs };
           if (!compact) return;
           // Persist only the checkpoint identity, not text; a reload must not repeat it.
           await ctx.storage.set(marker, view.checkpoint);

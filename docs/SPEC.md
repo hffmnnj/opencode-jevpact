@@ -9,6 +9,10 @@ One native V2 plugin, bounded recent visible text, conservative checkpoint decis
 native compaction, and a read-only status/check surface. Native pressure compaction stays enabled.
 The same native request must honor model/provider settings: OpenAI Responses-native
 compaction for the user's configured OpenAI models, OpenCode-native summarization otherwise.
+Recover visible task requests retained by native compaction without promoting peer
+traffic to user direction. Label summary-only context explicitly. Only completed
+progress-list updates may follow a candidate report; other tool results still need
+interpretation. New user or child activity cancels an in-flight judgment.
 
 ## Not doing
 No replacement summarizer, desktop controller, service, private Codex interfaces,
@@ -30,7 +34,7 @@ usage validation, privacy allow-lists, and unchanged compaction behavior.
 ## Acceptance checks
 1. A real authenticated TypeSafe call returns model jev-1.14.0 and valid choice distributions.
 2. Below the context floor, no hosted decision or native compaction is requested.
-3. Only confidently settled transitions qualify; unknown, unresolved, or invalid evidence does not.
+3. Only confidently settled transitions qualify; unknown, unresolved, or invalid evidence does not. Require strong boundary evidence (0.8) and affirmative supporting answers (0.7), with confidence at least 0.5. An explicitly configured legacy minProbability remains the floor for all answers unless minSupportingProbability is also set.
 4. Native compaction is requested once per eligible checkpoint; failures preserve normal work.
 5. Timeout, cancellation, malformed responses, redirects, and secret-bearing excerpts are handled safely.
 6. The plugin typechecks, its tests pass, loads on the existing 2.1.4 server without a restart, and its live diagnostic reaches Jev with the existing server key.
