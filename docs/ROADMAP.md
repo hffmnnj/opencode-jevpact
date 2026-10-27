@@ -1,5 +1,9 @@
 # Roadmap
 
+## In progress
+- Conservative hourly live-session R&D until 2026-10-27 06:30 America/Phoenix. Baseline at 18:41: 10 evaluations, 2 requests, 4 observed native completions, zero errors; TypeSafe usage 33921 input / 1320 output across 12 samples including 2 diagnostics.
+- Current session remains below 100k after native compaction; long session near 259k is still interpreting external results. Keep scoring defaults unchanged without new evidence. First hourly native background sleep started; stop at the deadline.
+
 ## Done
 - Inspected JevPact and native V2 plugin documentation.
 - Verified the existing key is present in both the tool and main-server environments.
@@ -28,6 +32,8 @@
 - Confirmed the long session's retained task is recovered in an offline report-prefix check; peer message bodies are excluded. Earlier attractive checkpoints before activation were retrospective examples, not live-plugin failures.
 - Typecheck and all 106 tests passed. Live Jev diagnostic succeeded in 288 ms; both active locations expose the upgraded policy, preserve collection start 1793060656906, and report healthy event streams on unchanged PID 219124.
 - Published the live checkpoint upgrade: https://github.com/hffmnnj/opencode-jevpact/pull/3. Real historical progress-list-only report passes structural selection; the shell-result report still declines.
+- Independent integrated safety review passed (106 tests). Hardened its incomplete-finish finding: require successful finish and finite completion timestamp before hosted judgment. Regression tests failed on original behavior; typecheck and all 111 tests now pass.
+- Live post-hardening diagnostic passed in 180 ms on unchanged PID 219124; both routing modes and collection timestamp remain intact. Totals after check: 11 real evaluations (2 compact / 9 wait), 2 admissions, 4 observed native completions, zero errors, plus 3 diagnostics. Source changes hot-reload; no manual compaction was forced.
 
 ## Follow-ups
 - Observe real-workload checkpoint frequency and token cost; no efficiency gain is claimed yet.

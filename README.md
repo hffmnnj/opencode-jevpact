@@ -41,6 +41,9 @@ original native OpenCode V2 plugin in that spirit, not a verbatim port.
 - A completed `todowrite`-only update after the report counts as
   administrative bookkeeping. Shell/patch/read/subagent results, running or
   errored todos, and newer peer/child results still wait for interpretation.
+- The report must have an explicit successful finish and completion timestamp.
+  Truncated, filtered, unknown-finish, errored, or still-streaming text is not
+  treated as a completed checkpoint, even if it sounds settled.
 - Never sent: native encrypted state, tool result bodies, todo input/result
   bodies, system instructions, attachments, hidden reasoning.
 - If the exact API key string appears inside the evidence excerpt, it is

@@ -13,6 +13,17 @@ Recover visible task requests retained by native compaction without promoting pe
 traffic to user direction. Label summary-only context explicitly. Only completed
 progress-list updates may follow a candidate report; other tool results still need
 interpretation. New user or child activity cancels an in-flight judgment.
+Provider-truncated, filtered, errored, unknown-finish, or still-streaming reports
+are not completed checkpoints. Require explicit successful finish and completion.
+
+## Overnight observation
+Observe the two authorized running sessions now and after 60-minute sleeps until
+2026-10-27 06:30 America/Phoenix. Shorten the last sleep to the deadline. Make
+small workload-supported improvements only; an observation with no justified
+change is a valid result. Do not lower scores just to increase compaction count,
+force compaction on active sessions, archive transcripts, or build a scheduler.
+Preserve routing, native pressure fallback, and lifetime statistics. Report
+observed usage and uncertainty rather than promising perfect calibration.
 
 ## Not doing
 No replacement summarizer, desktop controller, service, private Codex interfaces,

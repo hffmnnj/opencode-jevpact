@@ -11,7 +11,7 @@ export interface Snapshot {
   readonly requestSource: "live" | "native-compaction" | "compaction-summary" | "unavailable";
 }
 
-export type EvidenceSkipReason = "awaiting-report" | "usage-unavailable" | "uninterpreted-activity" | "newer-external-activity" | "no-report" | "source-too-large";
+export type EvidenceSkipReason = "awaiting-report" | "usage-unavailable" | "uninterpreted-activity" | "newer-external-activity" | "no-report" | "source-too-large" | "incomplete-report";
 export type EvidenceSelection = { readonly type: "ready"; readonly snapshot: Snapshot } | { readonly type: "skip"; readonly reason: EvidenceSkipReason };
 
 interface RequestEvidence {
@@ -60,6 +60,12 @@ export function selectSnapshot(messages: readonly SessionMessageInfo[], contextW
   // A completed progress-list update introduces no external result. Every other
   // tool still needs a later report: text before a shell/patch result cannot interpret it.
   if (tools.some((part) => part.name !== "todowrite" || part.state.status !== "completed")) return { type: "skip", reason: "uninterpreted-activity" };
+  // Fail closed on provider-truncated or still-streaming reports: only an
+  // explicitly finished checkpoint may reach hosted judgment.
+  if (typeof last.time.completed !== "number" || !Number.isFinite(last.time.completed)) return { type: "skip", reason: "incomplete-report" };
+  if (tools.length === 0) {
+    if (last.finish !== "stop") return { type: "skip", reason: "incomplete-report" };
+  } else if (last.finish !== "stop" && last.finish !== "tool-calls") return { type: "skip", reason: "incomplete-report" };
   const firstTool = last.content.findIndex((part) => part.type === "tool");
   const report = last.content.slice(0, firstTool < 0 ? undefined : firstTool).filter((part) => part.type === "text").map((part) => part.text).join("\n");
   if (!report.trim()) return { type: "skip", reason: "no-report" };

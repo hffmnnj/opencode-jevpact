@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { SessionMessageInfo } from "@opencode/client";
-import { snapshot } from "../src/evidence.ts";
+import { selectSnapshot, snapshot } from "../src/evidence.ts";
 
 // Behavioral contract under test (coordinator owns src/evidence.ts):
 // snapshot() gains requestSource: 'live' | 'native-compaction' |
@@ -40,10 +40,11 @@ function report(id: string, text: string, input = 120_000): SessionMessageInfo {
     content: [{ type: "text", text }],
     tokens: { input, output: 100, reasoning: 0, cache: { read: 3_000, write: 0 } },
     time: { created: 1, completed: 2 },
+    finish: "stop",
   } as unknown as SessionMessageInfo;
 }
 
-function assistantWithContent(id: string, content: unknown): SessionMessageInfo {
+function assistantWithContent(id: string, content: unknown, finish: string = "stop"): SessionMessageInfo {
   return {
     type: "assistant",
     id,
@@ -52,6 +53,7 @@ function assistantWithContent(id: string, content: unknown): SessionMessageInfo 
     content,
     tokens: { input: 120_000, output: 100, reasoning: 0, cache: { read: 3_000, write: 0 } },
     time: { created: 1, completed: 2 },
+    finish,
   } as unknown as SessionMessageInfo;
 }
 
@@ -340,4 +342,55 @@ test("historical tool marker precedes a later report without unknown claims", ()
   assert.ok(marker >= 0, "expected a marker stating result bodies are omitted");
   assert.ok(marker < view.evidence.excerpt.indexOf(reportText));
   assert.ok(!view.evidence.excerpt.toLowerCase().includes("unknown"));
+});
+
+test("truncated, filtered, or still-streaming finishes decline as incomplete-report", () => {
+  const reportText = "Checkpoint recorded. The sample plan is complete.";
+  const cases: Array<[string, SessionMessageInfo]> = [
+    ["length", { ...report("msg_report", reportText), finish: "length" } as unknown as SessionMessageInfo],
+    ["content-filter", { ...report("msg_report", reportText), finish: "content-filter" } as unknown as SessionMessageInfo],
+    ["error without last.error", { ...report("msg_report", reportText), finish: "error" } as unknown as SessionMessageInfo],
+    ["unknown", { ...report("msg_report", reportText), finish: "unknown" } as unknown as SessionMessageInfo],
+    ["absent finish", (() => { const value = { ...report("msg_report", reportText) } as unknown as Record<string, unknown>; delete value.finish; return value as unknown as SessionMessageInfo; })()],
+    ["text-only tool-calls", { ...report("msg_report", reportText), finish: "tool-calls" } as unknown as SessionMessageInfo],
+  ];
+  for (const [name, candidate] of cases) {
+    const selected = selectSnapshot([user("msg_user", "Plan the sample migration"), candidate], 400_000);
+    assert.equal(selected.type, "skip", `${name} must not select a snapshot`);
+    assert.equal(selected.reason, "incomplete-report", `${name} must report incomplete-report`);
+  }
+});
+
+test("absent or nonfinite completed timestamp declines as incomplete-report", () => {
+  const reportText = "Checkpoint recorded. The sample plan is complete.";
+  const withoutCompleted = { ...report("msg_report", reportText), time: { created: 1 } } as unknown as SessionMessageInfo;
+  const nanCompleted = { ...report("msg_report", reportText), time: { created: 1, completed: Number.NaN } } as unknown as SessionMessageInfo;
+  const infiniteCompleted = { ...report("msg_report", reportText), time: { created: 1, completed: Number.POSITIVE_INFINITY } } as unknown as SessionMessageInfo;
+  for (const [name, candidate] of [["absent completed", withoutCompleted], ["NaN completed", nanCompleted], ["infinite completed", infiniteCompleted]] as const) {
+    const selected = selectSnapshot([user("msg_user", "Plan the sample migration"), candidate], 400_000);
+    assert.equal(selected.type, "skip", `${name} must not select a snapshot`);
+    assert.equal(selected.reason, "incomplete-report", `${name} must report incomplete-report`);
+  }
+});
+
+test("explicit error signal keeps the existing no-report veto", () => {
+  const candidate = {
+    ...report("msg_report", "Checkpoint recorded. The sample plan is complete."),
+    finish: "error",
+    error: { message: "provider reported an error" },
+  } as unknown as SessionMessageInfo;
+  const selected = selectSnapshot([user("msg_user", "Plan the sample migration"), candidate], 400_000);
+  assert.equal(selected.type, "skip");
+  assert.equal(selected.reason, "no-report");
+});
+
+test("successful stop and todowrite tool-calls reports remain eligible", () => {
+  const stopView = snapshot([user("msg_user", "Plan the sample migration"), report("msg_report", "Checkpoint recorded. The sample plan is complete.")], 400_000);
+  assert.ok(stopView, "expected a snapshot for an explicit stop report");
+  const toolCallsView = snapshot([user("msg_user", "Plan the sample migration"), assistantWithContent("msg_report", [
+    { type: "text", text: "Checkpoint recorded. The sample plan is complete." },
+    completedTool("todowrite", "TODO_BODY_SECRET"),
+  ], "tool-calls")], 400_000);
+  assert.ok(toolCallsView, "expected a snapshot for a completed todowrite tool-calls report");
+  assert.ok(toolCallsView.evidence.excerpt.includes("Checkpoint recorded. The sample plan is complete."));
 });
