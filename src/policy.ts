@@ -69,9 +69,13 @@ export function shouldCompact(
   if (openResult.choice !== "no") {
     return false;
   }
-  for (const answer of [boundary, settled, openResult] as const) {
+  for (const [answer, floor] of [
+    [boundary, options.minProbability],
+    [settled, options.minSupportingProbability],
+    [openResult, options.minSupportingProbability],
+  ] as const) {
     const selected = answer.probabilities[answer.choice];
-    if (typeof selected !== "number" || !(selected >= options.minProbability)) {
+    if (typeof selected !== "number" || !(selected >= floor)) {
       return false;
     }
     if (
@@ -140,7 +144,7 @@ function parseMinRequests(value: unknown, fallback: number): number {
 }
 
 function parseThreshold(
-  name: "minProbability" | "minConfidence",
+  name: "minProbability" | "minSupportingProbability" | "minConfidence",
   value: unknown,
   fallback: number,
 ): number {
@@ -163,6 +167,20 @@ function parseThreshold(
 export function parsePolicy(
   options: Readonly<Record<string, unknown>>,
 ): PolicyOptions {
+  const minProbability = parseThreshold(
+    "minProbability",
+    options["minProbability"],
+    DEFAULT_POLICY.minProbability,
+  );
+  const minSupportingProbability =
+    options["minSupportingProbability"] === undefined &&
+    options["minProbability"] !== undefined
+      ? minProbability
+      : parseThreshold(
+          "minSupportingProbability",
+          options["minSupportingProbability"],
+          DEFAULT_POLICY.minSupportingProbability,
+        );
   return {
     minInputTokens: parseTokenField(
       "minInputTokens",
@@ -178,11 +196,8 @@ export function parsePolicy(
       options["minRequests"],
       DEFAULT_POLICY.minRequests,
     ),
-    minProbability: parseThreshold(
-      "minProbability",
-      options["minProbability"],
-      DEFAULT_POLICY.minProbability,
-    ),
+    minProbability,
+    minSupportingProbability,
     minConfidence: parseThreshold(
       "minConfidence",
       options["minConfidence"],
