@@ -1,17 +1,29 @@
 {
-  "name": "opencode-jevpact",
+  "name": "hffmnnj.jevpact",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "main": "index.ts",
   "exports": { ".": "./index.ts" },
+  "files": [
+    "index.ts",
+    "src/**/*.ts",
+    "README.md",
+    "assets/banner.png"
+  ],
   "engines": { "node": ">=26" },
+  "publishConfig": { "access": "public" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hffmnnj/opencode-jevpact.git"
+  },
   "scripts": {
     "test": "node --test test/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "@opencode/plugin": "2.1.4"
+  },
   "devDependencies": {
-    "@opencode/plugin": "2.1.4",
     "@types/node": "26.6.5",
     "typescript": "5.9.3"
   }
