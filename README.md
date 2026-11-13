@@ -1,16 +1,16 @@
-![Jevpact: Keep what matters.](assets/banner.png)
+![Jevpact: Keep what matters.](https://unpkg.com/hffmnnj.jevpact@0.1.0/assets/banner.png)
 
-# opencode-jevpact
+# jevpact
 
-Jev-timed native context compaction for OpenCode V2.
+Jev-timed native context compaction for OpenCode V2, published as
+`hffmnnj.jevpact`.
 
 The plugin asks TypeSafe Jev whether the current work looks like a useful
 transition, and if so requests one native OpenCode compaction. It never
 summarizes, rewrites, or continues the session itself.
 
-This is a private source plugin loaded from a local checkout, not a published
-npm package. It runs inside the existing OpenCode server; no separate local
-service is involved.
+It runs inside the existing OpenCode server; no separate local service is
+involved.
 
 Inspired by [transcendr/jevpact](https://github.com/transcendr/jevpact)
 (CC BY 4.0, by Slopware Engineer, https://x.com/aienginerd). This is an
@@ -100,9 +100,9 @@ metadata are stored.
   in the totals; normal compaction behavior continues.
 
 Read the aggregate via `POST /api/rpc/jevpact/stats` with body `{"input":{}}`
-using the server's existing OpenCode authentication.
+using the server's existing OpenCode authentication. From a source checkout,
 `node scripts/check-live.ts` prints the full status output, including
-`status.stats`.
+`status.stats`; the script is not included in the npm package.
 
 ### Model breakdown
 
@@ -147,20 +147,25 @@ measurement.
 
 ## Install
 
-Place the checkout at a stable absolute path, then add one entry to the
-OpenCode `plugins` array. Replace `/path/to/opencode-jevpact` with the
-checkout location:
+The package targets Bun-based OpenCode V2. It ships TypeScript source; plain
+Node.js cannot import that source from `node_modules`, even on Node 26.
+Add one entry to the OpenCode `plugins` array:
 
 ```json
 {
   "plugins": [
     {
-      "package": "/path/to/opencode-jevpact",
+      "package": "hffmnnj.jevpact",
       "options": {}
     }
   ]
 }
 ```
+
+If the plugin was already registered from a local checkout, replace that
+entry rather than adding a second one. Loading both would load the same code
+twice. The runtime plugin ID remains `jevpact`, so existing durable
+statistics and checkpoint markers continue to apply.
 
 OpenCode native hot reload picks it up; no service restart is needed. The
 plugin reads the existing `TYPESAFE_API_KEY` from the OpenCode server
@@ -194,17 +199,19 @@ request count (3), and cooldown (60s) are unchanged.
 
 ## Development
 
-Node 26 or newer. From the checkout:
+Node 26 or newer. These commands and the operational scripts below run from a
+source checkout only; they are not included in the npm package:
 
 ```sh
-cd /path/to/opencode-jevpact
+git clone https://github.com/hffmnnj/opencode-jevpact.git
+cd opencode-jevpact
 npm ci --ignore-scripts
 npm run typecheck
 npm test
 ```
 
-Run these before registering the plugin. The checkout is loaded directly; no
-packaging or publish step is required.
+Run these before registering the plugin. Installing the npm package requires
+no build or packaging step.
 
 ## Limitations
 
@@ -233,5 +240,6 @@ Live RPC methods (use the server's existing authentication):
 - `jevpact/check` makes one live Jev call using an embedded harmless sample,
   never session text.
 
-See [docs/DEPLOY.md](docs/DEPLOY.md) for commands. Never put real secrets in
-config files, issue text, or pasted command output.
+See [docs/DEPLOY.md](https://github.com/hffmnnj/opencode-jevpact/blob/main/docs/DEPLOY.md)
+for commands; operational docs are not included in the npm package. Never put
+real secrets in config files, issue text, or pasted command output.
