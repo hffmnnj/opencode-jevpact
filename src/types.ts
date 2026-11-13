@@ -31,6 +31,7 @@ export interface PolicyOptions {
   readonly minGrowthTokens: number;
   readonly minRequests: number;
   readonly minProbability: number;
+  readonly minSupportingProbability: number;
   readonly minConfidence: number;
   readonly cooldownMs: number;
 }
@@ -40,6 +41,7 @@ export const DEFAULT_POLICY: PolicyOptions = {
   minGrowthTokens: 30_000,
   minRequests: 3,
   minProbability: 0.8,
+  minSupportingProbability: 0.7,
   minConfidence: 0.5,
   cooldownMs: 60_000,
 };
