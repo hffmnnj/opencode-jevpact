@@ -1,6 +1,6 @@
 import { Plugin, Rpc } from "@opencode/plugin";
 import type { ModelInfo } from "@opencode/client";
-import { evaluate, MODEL } from "./client.ts";
+import { evaluate, parseModel } from "./client.ts";
 import { selectSnapshot } from "./evidence.ts";
 import type { EvidenceSkipReason } from "./evidence.ts";
 import { eligible, parsePolicy, shouldCompact } from "./policy.ts";
@@ -37,7 +37,7 @@ export function compactionMode(model: Pick<ModelInfo, "settings">): "provider-na
 }
 
 export interface Dependencies {
-  readonly evaluate?: (evidence: Evidence, options: { apiKey: string; signal?: AbortSignal }) => Promise<Evaluation>;
+  readonly evaluate?: (evidence: Evidence, options: { apiKey: string; signal?: AbortSignal; model?: string }) => Promise<Evaluation>;
   readonly apiKey?: () => string | undefined;
   readonly now?: () => number;
 }
@@ -49,6 +49,18 @@ export function createPlugin(dependencies: Dependencies = {}): Plugin.Plugin {
       const policy = parsePolicy(ctx.options);
       const enabled = ctx.options.enabled !== false;
       const key = dependencies.apiKey ?? (() => process.env.TYPESAFE_API_KEY);
+      const judgeModel = parseModel(ctx.options.model);
+      const initialKey = key();
+      if (initialKey?.trim() && judgeModel.includes(initialKey)) throw new Error("Invalid System One model");
+      const safeModel = () => {
+        const currentKey = key();
+        return currentKey?.trim() && judgeModel.includes(currentKey) ? "[REDACTED]" : judgeModel;
+      };
+      const judgeOptions = (signal: AbortSignal) => {
+        const apiKey = key() ?? "";
+        if (apiKey.trim() && judgeModel.includes(apiKey)) throw new Error("Invalid System One model");
+        return { apiKey, signal, model: judgeModel };
+      };
       const judge = dependencies.evaluate ?? evaluate;
       const now = dependencies.now ?? Date.now;
       const durableStats = createStats(ctx.storage, now);
@@ -145,17 +157,17 @@ export function createPlugin(dependencies: Dependencies = {}): Plugin.Plugin {
       })();
 
       await ctx.rpc.register(rpc, {
-        status: async () => ({ enabled, configured: Boolean(key()?.trim()), model: MODEL, location: ctx.location.directory, policy, eventStreamHealthy, ...counters, lastDecision, lastSkipReason, lastEvidenceSkip, ...await readStats() }),
+        status: async () => ({ enabled, configured: Boolean(key()?.trim()), model: safeModel(), location: ctx.location.directory, policy, eventStreamHealthy, ...counters, lastDecision, lastSkipReason, lastEvidenceSkip, ...await readStats() }),
         stats: async () => await readStats(),
         check: async (_input, call) => {
           const started = now();
           try {
-            const result = await judge({ excerpt: "User: Implement the parser, then deploy it.\nAssistant: The parser implementation is complete. All parser tests passed and their results confirm the expected behavior. The implementation phase is finished. The next distinct phase is deployment.", inputTokens: 0, contextWindow: 0 }, { apiKey: key() ?? "", signal: AbortSignal.any([lifetime.signal, call.signal]) });
+            const result = await judge({ excerpt: "User: Implement the parser, then deploy it.\nAssistant: The parser implementation is complete. All parser tests passed and their results confirm the expected behavior. The implementation phase is finished. The next distinct phase is deployment.", inputTokens: 0, contextWindow: 0 }, judgeOptions(AbortSignal.any([lifetime.signal, call.signal])));
             void record({ type: "diagnostic", outcome: "success", latencyMs: result.latencyMs, ...(result.usage ? { usage: result.usage } : {}) });
             return { ok: true, ...result, wouldCompact: shouldCompact(result, policy) };
           } catch {
             void record({ type: "diagnostic", outcome: "error", latencyMs: Math.max(0, now() - started) });
-            return { ok: false, model: MODEL, error: "Jev diagnostic failed; verify key availability and TypeSafe connectivity" };
+            return { ok: false, model: safeModel(), error: "Jev diagnostic failed; verify key availability and TypeSafe connectivity" };
           }
         },
       });
@@ -204,7 +216,7 @@ export function createPlugin(dependencies: Dependencies = {}): Plugin.Plugin {
           value.lastEvaluationAt = now();
           counters.evaluations++;
           evaluationStartedAt = now();
-          const result = await judge(view.evidence, { apiKey: key() ?? "", signal });
+          const result = await judge(view.evidence, judgeOptions(signal));
           if (signal.aborted || revision !== value.revision || !eventStreamHealthy) {
             evaluationRecorded = true;
             void record({ type: "evaluation", outcome: "cancelled", latencyMs: result.latencyMs, ...(result.usage ? { usage: result.usage } : {}), ...(resolvedModel ? { model: resolvedModel } : {}) });
@@ -214,7 +226,7 @@ export function createPlugin(dependencies: Dependencies = {}): Plugin.Plugin {
           const compact = shouldCompact(result, policy);
           evaluationRecorded = true;
           void record({ type: "evaluation", outcome: compact ? "compact" : "wait", latencyMs: result.latencyMs, ...(result.usage ? { usage: result.usage } : {}), ...(resolvedModel ? { model: resolvedModel } : {}) });
-          lastDecision = { at: now(), sessionID, checkpointID: view.checkpoint, requestSource: view.requestSource, thresholds: { boundary: policy.minProbability, supporting: policy.minSupportingProbability, confidence: policy.minConfidence }, action: compact ? "compact" : "wait", mode: compactionMode(model), providerID: model.providerID, modelID: model.id, inputTokens: view.evidence.inputTokens, answers: result.answers, latencyMs: result.latencyMs };
+          lastDecision = { at: now(), sessionID, checkpointID: view.checkpoint, requestSource: view.requestSource, thresholds: { boundary: policy.minProbability, supporting: policy.minSupportingProbability, confidence: policy.minConfidence }, action: compact ? "compact" : "wait", mode: compactionMode(model), providerID: model.providerID, modelID: model.id, judgeModel: result.model, inputTokens: view.evidence.inputTokens, answers: result.answers, latencyMs: result.latencyMs };
           if (!compact) return;
           // Persist only the checkpoint identity, not text; a reload must not repeat it.
           await ctx.storage.set(marker, view.checkpoint);

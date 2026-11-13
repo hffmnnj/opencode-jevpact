@@ -27,10 +27,11 @@ async function harness(options: {
   native?: boolean;
   input?: number;
   enabled?: boolean;
-  judge?: (evidence: Evidence, options: { signal?: AbortSignal }) => Promise<Evaluation>;
+  judge?: (evidence: Evidence, options: { signal?: AbortSignal; model?: string }) => Promise<Evaluation>;
   storage?: Map<string, unknown>;
   admissionError?: boolean;
   minRequests?: number;
+  modelOption?: unknown;
   now?: number;
   statsStorageFailure?: "read" | "write";
 } = {}) {
@@ -45,7 +46,7 @@ async function harness(options: {
   const stream = new ReadableStream<OpenCodeEvent>({ start(value) { controller = value; } });
   const model = { id: "gpt-6.1-terra", providerID: "openai", settings: options.native === false ? {} : { compaction: { type: "native" } }, limit: { context: 400_000 } };
   const context = {
-    options: { minRequests: options.minRequests ?? 1, cooldownMs: 0, enabled: options.enabled ?? true },
+    options: { minRequests: options.minRequests ?? 1, cooldownMs: 0, enabled: options.enabled ?? true, model: options.modelOption },
     location: { directory },
     model: { list: async () => ({ data: [model] }) },
     storage: {
@@ -87,12 +88,40 @@ async function harness(options: {
     prompt: async () => { await hooks.get("prompt")!({ sessionID: "ses_test" }); },
     status: async () => await methods.get("status")!({}, { signal: new AbortController().signal }) as Record<string, unknown>,
     stats: async () => await methods.get("stats")!({}, { signal: new AbortController().signal }) as { stats: StatsSnapshot | null; statsStorageErrors: number },
-    check: async () => await methods.get("check")!({}, { signal: new AbortController().signal }) as { ok: boolean },
+    check: async () => await methods.get("check")!({}, { signal: new AbortController().signal }) as { ok: boolean; model: string },
     emit: (type: "session.execution.succeeded" | "session.execution.interrupted" | "session.compaction.ended" | "session.synthetic") => controller.enqueue({ type, location: { directory }, data: { sessionID: "ses_test", reason: type === "session.compaction.ended" ? "manual" : "user", text: "" } } as OpenCodeEvent),
     messages: (value: SessionMessageInfo[]) => { messages = value; },
     close: async () => { await cleanup!(); },
   };
 }
+
+test("configured judge model reaches diagnostics and checkpoint, while usage remains attributed to the session model", async () => {
+  const seen: (string | undefined)[] = [];
+  const app = await harness({ modelOption: "jev-latest", judge: async (_evidence, call: { model?: string }) => {
+    seen.push(call.model);
+    return { ...approval, model: "jev-2.0.0", usage: { inputTokens: 10, outputTokens: 2 } };
+  } });
+  try {
+    assert.equal((await app.status()).model, "jev-latest");
+    assert.equal((await app.check()).model, "jev-2.0.0");
+    await app.context();
+    assert.deepEqual(seen, ["jev-latest", "jev-latest"]);
+    assert.equal(((await app.status()).lastDecision as Record<string, unknown>).judgeModel, "jev-2.0.0");
+    const stats = (await app.stats()).stats!;
+    assert.deepEqual(stats.usage, { samples: 2, inputTokens: 20, outputTokens: 4 });
+    assert.equal(stats.modelDetails!.models[0].modelID, "gpt-6.1-terra");
+    assert.equal(app.compactCalls.length, 1);
+  } finally { await app.close(); }
+});
+
+test("invalid configured models fail setup without exposing the key", async () => {
+  for (const modelOption of ["", "  ", " jev-latest", "jev-latest ", "x".repeat(257), null, 7, "test-key"]) {
+    await assert.rejects(harness({ modelOption }), (error: Error) => {
+      assert.ok(!error.message.includes("test-key"));
+      return true;
+    });
+  }
+});
 
 for (const native of [true, false]) {
   test(`settled checkpoint requests native API without replacing ${native ? "OpenAI" : "OpenCode"} route`, async () => {
@@ -129,7 +158,7 @@ test("unresolved evidence and transport failures preserve normal execution", asy
 test("new user direction cancels an in-flight positive judgment", async () => {
   const started = deferred<void>();
   const result = deferred<Evaluation>();
-  const app = await harness({ judge: async () => { started.resolve(); return result.promise; } });
+  const app = await harness({ modelOption: "jev-latest", judge: async () => { started.resolve(); return result.promise; } });
   try {
     const pending = app.context();
     await started.promise;
