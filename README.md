@@ -19,7 +19,8 @@ original native OpenCode V2 plugin in that spirit, not a verbatim port.
 ## How it works
 
 - Hosted endpoint: `https://api.typesafe.ai/v1/systemone`
-- Model: `jev-1.14.0` (the shorthand `jev-1.14` is rejected by the API)
+- Default System One model: `jev-1.14.0`; configure `model` to use another
+  hosted model ID or alias. TypeSafe may return a resolved model ID for an alias.
 - Auth uses the existing `TYPESAFE_API_KEY` from the OpenCode server
   environment. The plugin never copies the key, writes it to disk, or logs it.
 - OpenCode native compaction and the native pressure fallback remain
@@ -178,6 +179,7 @@ defaults shown:
 
 | Option | Default | Meaning |
 |---|---|---|
+| `model` | `jev-1.14.0` | Hosted TypeSafe System One model ID or alias; nonempty, no surrounding whitespace, at most 256 UTF-8 bytes |
 | `minInputTokens` | `100000` | Minimum context size before any evaluation |
 | `minGrowthTokens` | `30000` | Minimum growth since the post-compaction baseline |
 | `minRequests` | `3` | Minimum distinct model steps before evaluating |
@@ -188,6 +190,10 @@ defaults shown:
 | `enabled` | `true` | Set `false` to disable without removing the entry |
 
 Below the context floor nothing is sent and no compaction is requested.
+The endpoint is fixed: the selected model receives the session excerpt described
+above at TypeSafe's hosted service. Invalid model configuration prevents plugin
+setup; API errors or invalid responses leave normal execution unchanged. The
+existing thresholds are not calibrated specifically for alternative models.
 Boundary and settled must answer `yes`, and open_result must answer `no`;
 any contrary or `unknown` choice vetoes the checkpoint. The boundary bar
 stays at 0.8 while the two supporting answers default to 0.7: a real

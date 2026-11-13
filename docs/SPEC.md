@@ -2,7 +2,10 @@
 
 ## Goal
 Use TypeSafe Jev to time native OpenCode compaction at useful work transitions.
-Use the existing server-side TYPESAFE_API_KEY and pin jev-1.14.0 (the API rejects the shorthand jev-1.14).
+Use the existing server-side TYPESAFE_API_KEY and fixed TypeSafe hosted endpoint.
+Default to jev-1.14.0, with a validated optional hosted model ID or alias.
+The status reports the configured model; responses report the actual model,
+which may differ from the requested ID or alias, including the default.
 
 ## Scope
 One native V2 plugin, bounded recent visible text, conservative checkpoint decisions,
@@ -40,7 +43,7 @@ Check persistence across reload, concurrent updates without lost increments, opt
 usage validation, privacy allow-lists, and unchanged compaction behavior.
 
 ## Acceptance checks
-1. A real authenticated TypeSafe call returns model jev-1.14.0 and valid choice distributions.
+1. A real authenticated TypeSafe call returns a nonempty actual model ID and valid choice distributions for the configured model.
 2. Below the context floor, no hosted decision or native compaction is requested.
 3. Only confidently settled transitions qualify; unknown, unresolved, or invalid evidence does not. Require strong boundary evidence (0.8) and affirmative supporting answers (0.7), with confidence at least 0.5. An explicitly configured legacy minProbability remains the floor for all answers unless minSupportingProbability is also set.
 4. Native compaction is requested once per eligible checkpoint; failures preserve normal work.
