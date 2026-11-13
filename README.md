@@ -1,3 +1,5 @@
+![Jevpact: Keep what matters.](assets/banner.png)
+
 # opencode-jevpact
 
 Jev-timed native context compaction for OpenCode V2.
@@ -6,8 +8,12 @@ The plugin asks TypeSafe Jev whether the current work looks like a useful
 transition, and if so requests one native OpenCode compaction. It never
 summarizes, rewrites, or continues the session itself.
 
+This is a private source plugin loaded from a local checkout, not a published
+npm package. It runs inside the existing OpenCode server; no separate local
+service is involved.
+
 Inspired by [transcendr/jevpact](https://github.com/transcendr/jevpact)
-(CC BY 4.0, by Slopware Engineer — https://x.com/aienginerd). This is an
+(CC BY 4.0, by Slopware Engineer, https://x.com/aienginerd). This is an
 original native OpenCode V2 plugin in that spirit, not a verbatim port.
 
 ## How it works
@@ -19,17 +25,18 @@ original native OpenCode V2 plugin in that spirit, not a verbatim port.
 - OpenCode native compaction and the native pressure fallback remain
   authoritative. This plugin only times the request; it is not a replacement
   summarizer, service, desktop controller, or resume mechanism.
-- Model settings select the compactor: OpenAI Responses-native compaction for
-  configured OpenAI models, OpenCode-native summary compaction otherwise.
-  The plugin never overrides that routing or the compaction hook's result.
+- Model settings select the compactor: provider-native compaction for models
+  configured for it (for example, OpenAI Responses-native models), and
+  OpenCode-native summary compaction otherwise. The plugin never overrides
+  that routing or the compaction hook's result.
 - Judgments run out of band and never delay model dispatch. A Jev failure
   preserves normal work. There are no automatic transport retries.
 
 ## What is sent
 
-- Source-linked current/prior requests, current report, and recent visible
-  chronology, capped at 24 KiB. Current source requests and the report are
-  never truncated; if they cannot fit, the checkpoint is skipped.
+- Source-linked current and prior requests, the current report, and recent
+  visible chronology, capped at 24 KiB. Current source requests and the report
+  are never truncated; if they cannot fit, the checkpoint is skipped.
 - Never sent: tool bodies, system instructions, attachments, hidden reasoning.
 - If the exact API key string appears inside the evidence excerpt, it is
   redacted before sending. Arbitrary source text may still contain other
@@ -38,84 +45,96 @@ original native OpenCode V2 plugin in that spirit, not a verbatim port.
 
 ## What is stored
 
-Status keeps only counts, choices, and error strings. No transcript text and
-no credentials are stored. A checkpoint message ID is persisted for reload
-deduplication. Top-level status counters cover the current plugin instance;
-lifetime aggregate totals live in `status.stats` (see Statistics below).
+The in-memory status keeps counters, policy, resolved route details, the last
+decision including Jev's answers, and error strings. No transcript text and no
+credentials are stored. A checkpoint message ID is persisted for reload
+deduplication. Top-level counters cover the current plugin instance; lifetime
+aggregate totals live in `status.stats` (see Statistics below).
 
 ## Statistics
 
-Lifetime aggregate totals live in native OpenCode plugin storage under key
-`stats/v1`, shared across locations and surviving plugin reloads and server
-restarts. Durable collection starts with this version: earlier in-memory
-counts are not recoverable history and are not backfilled. There is no
-telemetry service, transcript archive, daily history, dashboard, reset/delete
-endpoint, or estimated savings or cost.
+Lifetime totals live in native OpenCode plugin storage under key `stats/v1`,
+shared across locations. The stored totals survive plugin reloads and server
+restarts. Durable collection starts with this version: earlier in-memory counts
+are not recoverable history and are not backfilled.
+There is no telemetry service, transcript archive, daily history, dashboard,
+reset/delete endpoint, or estimated savings or cost.
 
-The stored shape holds only timestamps, allow-listed counters, the fixed
-skip reasons, cumulative and maximum latency, validated TypeSafe
-input/output token totals with a usage sample count, and requested route
-counts by mode. No error strings, session content, credentials, or arbitrary
-response metadata are stored.
+The stored shape holds only a schema version, timestamps, allow-listed counters,
+the fixed skip reasons, cumulative and maximum latency, validated TypeSafe
+input/output token totals with a usage sample count, and requested route counts
+by mode. No error strings, session content, credentials, or arbitrary response
+metadata are stored.
 
 - TypeSafe usage is optional: missing or malformed usage is unknown, not a
   fabricated zero. Only validated input/output pairs add a usage sample.
-- Diagnostic calls have separate counts from real checkpoint evaluations,
-  but known token usage and latency include both, so diagnostics' API
-  consumption is not hidden.
+- Diagnostic calls have separate counts from real checkpoint evaluations, but
+  known token usage and latency include both, so diagnostics' API consumption
+  is not hidden.
 - `compactionsRequested` counts plugin native admissions, while
-  `compactionsCompleted`/`compactionsFailed` count all native completion and
-  failure events observed by the plugin, including native manual and
+  `compactionsCompleted` and `compactionsFailed` count all native completion
+  and failure events observed by the plugin, including native manual and
   pressure events. They are observed, not attributed savings.
 - The durable aggregate is served in `status.stats` and the read-only
-  `jevpact/stats` RPC. Both carry a `statsStorageErrors` collection/persistence
-  failure count (in memory, itself not durable when writes fail). If
-  saved totals cannot be read, `stats` is `null` rather than fake zeros.
-  Failed writes also raise this indicator and can leave gaps in the totals;
-  normal compaction behavior continues.
+  `jevpact/stats` RPC. Both carry `statsStorageErrors`, which counts collection
+  and persistence failures. That counter lives in memory and is not durable
+  when writes fail. If saved totals cannot be read, `stats` is `null` rather
+  than fake zeros. Failed writes also raise this indicator and can leave gaps
+  in the totals; normal compaction behavior continues.
 
 Read the aggregate via `POST /api/rpc/jevpact/stats` with body `{"input":{}}`
-using the server's existing OpenCode authentication. `node scripts/check-live.ts`
-prints the full status output, including `status.stats`.
+using the server's existing OpenCode authentication.
+`node scripts/check-live.ts` prints the full status output, including
+`status.stats`.
 
 ## What carries over from JevPact
 
 The source review covered its controller state machine, `timing-context.js`,
-`transcript.js`, `policy.js`, Jev rubrics, and associated tests, not just the README.
+`transcript.js`, `policy.js`, Jev rubrics, and associated tests, not just the
+README.
 
-- Preserve source-linked current/prior requests and referential context.
+- Preserve source-linked current and prior requests and referential context.
 - Refuse old-turn checkpoints after new direction, incomplete source coverage,
-  and tool activity that has no later assistant interpretation, before calling Jev.
+  and tool activity that has no later assistant interpretation, before calling
+  Jev.
 - Count token-bearing model responses since compaction, including tool-only
   steps. Use the first post-compaction usage as the growth baseline.
 - Observe actual native completion; an admitted request is not completion.
-- Cancel stale decisions on prompts, new execution steps, stops, deletion, and unload.
+- Cancel stale decisions on prompts, new execution steps, stops, deletion, and
+  unload.
 
-Unlike the Codex controller, no pause/deferral/resume messages, local service,
-rollout parser, or recovery-state database are needed. OpenCode already queues
-compaction safely and owns continuation. Native context pressure remains the fallback.
-The thresholds are intentionally conservative; no token-saving or accuracy improvement
-is claimed without workload measurement.
+Unlike the Codex controller, no pause, deferral, or resume messages, local
+service, rollout parser, or recovery-state database are needed. OpenCode
+already queues compaction safely and owns continuation. Native context
+pressure remains the fallback. The thresholds are intentionally conservative;
+no token-saving or accuracy improvement is claimed without workload
+measurement.
 
-## Setup
+## Install
 
-Add one entry to the OpenCode `plugins` array (native hot reload picks it
-up; no service restart):
+Place the checkout at a stable absolute path, then add one entry to the
+OpenCode `plugins` array. Replace `/path/to/opencode-jevpact` with the
+checkout location:
 
 ```json
 {
   "plugins": [
     {
-      "package": "/home/james/Documents/opencode-jevpact",
+      "package": "/path/to/opencode-jevpact",
       "options": {}
     }
   ]
 }
 ```
 
+OpenCode native hot reload picks it up; no service restart is needed. The
+plugin reads the existing `TYPESAFE_API_KEY` from the OpenCode server
+environment and never copies it into config or files.
+
 ### Policy options
 
-All fields are optional; unset fields use the provisional defaults:
+Fields below go inside `options`; all are optional and unset fields use the
+defaults shown:
 
 | Option | Default | Meaning |
 |---|---|---|
@@ -127,9 +146,23 @@ All fields are optional; unset fields use the provisional defaults:
 | `cooldownMs` | `60000` | Minimum gap between evaluations |
 | `enabled` | `true` | Set `false` to disable without removing the entry |
 
-Below the context floor nothing is sent and no compaction is requested.
-Only confidently settled transitions qualify; unknown, unresolved, or
-invalid evidence does not trigger compaction.
+Below the context floor nothing is sent and no compaction is requested. Only
+confidently settled transitions qualify; unknown, unresolved, or invalid
+evidence does not trigger compaction.
+
+## Development
+
+Node 26 or newer. From the checkout:
+
+```sh
+cd /path/to/opencode-jevpact
+npm ci --ignore-scripts
+npm run typecheck
+npm test
+```
+
+Run these before registering the plugin. The checkout is loaded directly; no
+packaging or publish step is required.
 
 ## Limitations
 
@@ -140,16 +173,19 @@ invalid evidence does not trigger compaction.
 - Threshold defaults are provisional and may need tuning for your workload.
 - Checkpoints are considered before model requests and at successful turn
   completion. An active turn continues through OpenCode's own runner after
-  compaction; an idle turn stays idle. New direction or stops cancel stale decisions.
+  compaction; an idle turn stays idle. New direction or stops cancel stale
+  decisions.
 
 ## Diagnostics
 
-Read-only live RPC methods (use the server's existing key):
+Live RPC methods (use the server's existing authentication):
 
-- `jevpact/status` — loaded, configured, and last-decision counts.
-- `jevpact/stats` — lifetime aggregate totals (read-only; `null` when storage is unavailable).
-- `jevpact/check` — one live Jev call using an embedded harmless sample,
+- `jevpact/status` is read-only: enabled and configured state, event-stream
+  health, counters, and the last decision.
+- `jevpact/stats` is read-only: lifetime aggregate totals, or `null` when
+  saved totals cannot be read.
+- `jevpact/check` makes one live Jev call using an embedded harmless sample,
   never session text.
 
-See `docs/DEPLOY.md` for commands. Never put real secrets in config files,
-issue text, or pasted command output.
+See [docs/DEPLOY.md](docs/DEPLOY.md) for commands. Never put real secrets in
+config files, issue text, or pasted command output.
