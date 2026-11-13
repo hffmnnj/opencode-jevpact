@@ -22,6 +22,7 @@ export interface Evaluation {
 
 export interface EvaluateOptions {
   readonly apiKey: string;
+  readonly model?: string;
   readonly signal?: AbortSignal;
   readonly fetch?: typeof globalThis.fetch;
 }

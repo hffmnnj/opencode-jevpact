@@ -158,12 +158,41 @@ describe("typesafe transport", () => {
     assert.ok(Number.isFinite(result.latencyMs) && result.latencyMs >= 0);
   });
 
-  it("rejects_wrong_model", async () => {
-    const { fetch, calls } = stubFetch(() =>
-      jsonResponse({ ...validPayload(), model: "jev-1.14" }),
-    );
-    await rejectsWithoutLeak(evaluate(evidence(), { apiKey: "model-key-004", fetch }), []);
-    assert.equal(calls.length, 1, "no retries on invalid model");
+  it("sends a configured alias and returns the resolved model and usage", async () => {
+    const { fetch, calls } = stubFetch(() => jsonResponse({ ...validPayload(), model: "jev-2.0.0", usage: { input_tokens: 31, output_tokens: 7 } }));
+    const result = await evaluate(evidence(), { apiKey: "model-key-004", model: "jev-latest", fetch });
+    assert.equal(sentBody(calls[0]).model, "jev-latest");
+    assert.equal(result.model, "jev-2.0.0");
+    assert.deepEqual(result.usage, { inputTokens: 31, outputTokens: 7 });
+  });
+
+  it("accepts a resolved response model for the default request", async () => {
+    const { fetch, calls } = stubFetch(() => jsonResponse({ ...validPayload(), model: "jev-resolved" }));
+    const result = await evaluate(evidence(), { apiKey: "model-key-default", fetch });
+    assert.equal(sentBody(calls[0]).model, MODEL_PIN);
+    assert.equal(result.model, "jev-resolved");
+  });
+
+  it("rejects model IDs with surrounding whitespace before sending", async () => {
+    for (const model of [" jev-latest", "jev-latest ", "\tjev-latest\n"]) {
+      const { fetch, calls } = stubFetch(() => jsonResponse(validPayload()));
+      await assert.rejects(evaluate(evidence(), { apiKey: "model-key-whitespace", model, fetch }), /Invalid System One model/);
+      assert.equal(calls.length, 0);
+    }
+  });
+
+  it("rejects invalid request and response models without leaking credentials", async () => {
+    const key = "secret-model-key";
+    for (const model of ["", "  ", "x".repeat(257), key, null, 42]) {
+      const { fetch, calls } = stubFetch(() => jsonResponse(validPayload()));
+      await rejectsWithoutLeak(evaluate(evidence(), { apiKey: key, model: model as string, fetch }), [key]);
+      assert.equal(calls.length, 0);
+    }
+    for (const model of ["", "  ", "x".repeat(257), null, 42, key]) {
+      const { fetch, calls } = stubFetch(() => jsonResponse({ ...validPayload(), model }));
+      await rejectsWithoutLeak(evaluate(evidence(), { apiKey: key, model: "jev-latest", fetch }), [key]);
+      assert.equal(calls.length, 1);
+    }
   });
 
   it("rejects_missing_answer", async () => {
@@ -258,6 +287,13 @@ describe("typesafe transport", () => {
     const apiKey = "sk-echo-key-016";
     const { fetch } = stubFetch(() => jsonResponse({ ...validPayload(), note: apiKey }));
     await rejectsWithoutLeak(evaluate(evidence(), { apiKey, fetch }), [apiKey]);
+  });
+
+  it("rejects JSON-escaped credential echoes", async () => {
+    const apiKey = "echo-secret";
+    const raw = JSON.stringify({ ...validPayload(), note: apiKey }).replace(apiKey, "\\u0065cho-secret");
+    const { fetch } = stubFetch(() => jsonResponse(null, 200, raw));
+    await rejectsWithoutLeak(evaluate(evidence(), { apiKey, model: "jev-latest", fetch }), [apiKey]);
   });
 
   it("refuses_blank_excerpt_without_sending", async () => {

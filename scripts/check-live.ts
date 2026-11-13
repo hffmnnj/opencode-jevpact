@@ -1,5 +1,5 @@
 const baseURL = "http://127.0.0.1:4108";
-const directory = process.argv[2] ?? "/home/james/.config/opencode-v2";
+const directory = process.argv[2] ?? process.cwd();
 const password = process.env.OPENCODE_SERVER_PASSWORD;
 if (!password) throw new Error("OPENCODE_SERVER_PASSWORD must be available in the environment");
 const authorization = "Basic " + Buffer.from(`opencode:${password}`).toString("base64");
@@ -22,9 +22,9 @@ const plugins = await request("/api/plugin") as { data: Array<{ id: string; stat
 const plugin = plugins.data.find((value) => value.id === "jevpact");
 if (plugin?.state.status !== "active") throw new Error("Jev checkpoint plugin is not active");
 const status = await request("/api/rpc/jevpact/status", "POST") as { output: { enabled: boolean; configured: boolean; eventStreamHealthy: boolean; model: string } };
-if (!status.output.enabled || !status.output.configured || !status.output.eventStreamHealthy || status.output.model !== "jev-1.14.0") throw new Error("Jev plugin is not enabled, configured, and observing events");
+if (!status.output.enabled || !status.output.configured || !status.output.eventStreamHealthy || typeof status.output.model !== "string" || !status.output.model.trim()) throw new Error("Jev plugin is not enabled, configured, and observing events");
 const check = await request("/api/rpc/jevpact/check", "POST") as { output: { ok: boolean; model: string } };
-if (!check.output.ok || check.output.model !== "jev-1.14.0") throw new Error("Jev live diagnostic did not pass");
+if (!check.output.ok || typeof check.output.model !== "string" || !check.output.model.trim()) throw new Error("Jev live diagnostic did not pass");
 const stored = await request("/api/rpc/jevpact/stats", "POST") as { output: { stats: { version: number } | null; statsStorageErrors: number } };
 if (stored.output.stats?.version !== 1 || stored.output.statsStorageErrors !== 0) throw new Error("Jev persistent statistics are unavailable");
 const models = await request("/api/model") as { data: Array<{ providerID: string; id: string; settings?: { compaction?: { type: string } } }> };
