@@ -1,10 +1,8 @@
 # Deploy runbook — opencode-jevpact
 
-Private repository. Changes land via topic PR; no automatic merge.
-
 ## 1. Install and verify
 
-Run in `/home/james/Documents/opencode-jevpact`:
+Run in the repository checkout:
 
 ```sh
 npm ci --ignore-scripts
@@ -22,7 +20,7 @@ Add one entry to the OpenCode `plugins` array:
 {
   "plugins": [
     {
-      "package": "/home/james/Documents/opencode-jevpact",
+      "package": "/absolute/path/to/opencode-jevpact",
       "options": {}
     }
   ]
@@ -31,7 +29,9 @@ Add one entry to the OpenCode `plugins` array:
 
 Policy fields (`minInputTokens`, `minGrowthTokens`, `minRequests`,
 `minProbability`, `minSupportingProbability`, `minConfidence`,
-`cooldownMs`) go inside `options`.
+`cooldownMs`) and the optional hosted System One `model` ID or alias go inside
+`options`. Model IDs must be nonempty, have no surrounding whitespace, and be
+at most 256 UTF-8 bytes. The default is `jev-1.14.0`.
 Unset fields use the README defaults. OpenCode native hot reload loads the
 plugin; do not restart any service.
 
@@ -41,7 +41,9 @@ is. Do not copy it into config, write it to files, or echo it.
 ## 3. Live check (authenticated)
 
 RPC methods are `jevpact/status` and `jevpact/check`. `check` calls
-`https://api.typesafe.ai/v1/systemone` with model `jev-1.14.0`.
+`https://api.typesafe.ai/v1/systemone` with the configured model. `status.model`
+is the configured ID or alias; `check.model` is the nonempty actual response
+model and may differ, including when the default is used.
 Against the existing authenticated main server, run from the repository:
 
 ```sh
