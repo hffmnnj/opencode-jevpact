@@ -18,6 +18,10 @@ progress-list updates may follow a candidate report; other tool results still ne
 interpretation. New user or child activity cancels an in-flight judgment.
 Provider-truncated, filtered, errored, unknown-finish, or still-streaming reports
 are not completed checkpoints. Require explicit successful finish and completion.
+Never compact a completely idle session: no open assistant text stream, no
+running shell, no running subagent, and no model request in flight. Re-check
+this immediately before native admission; child sessions count only as parent
+activity and are never judged.
 
 ## Overnight observation
 Observe the two authorized running sessions now and after 60-minute sleeps until

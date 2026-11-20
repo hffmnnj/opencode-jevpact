@@ -35,6 +35,7 @@ const skipReasons: readonly SkipReason[] = [
   "threshold",
   "duplicate",
   "busy",
+  "idle",
 ];
 const compactionModes: readonly CompactionMode[] = [
   "provider-native",
@@ -72,6 +73,12 @@ function countIn(
   const value = values[key];
   if (!isCount(value)) throw new Error("Invalid Jev stats state");
   return value;
+}
+
+function countSkipIn(values: Record<string, unknown>, key: SkipReason): number {
+  // "idle" is newer than the persisted v1 shape; older state omits it.
+  if (key === "idle" && values[key] === undefined) return 0;
+  return countIn(values, key);
 }
 
 // Reconstruct only the allow-listed shape so persisted text, credentials, or
@@ -159,7 +166,7 @@ function readSnapshot(value: unknown): StatsSnapshot {
   const latency = section(saved.latency);
   const usage = section(saved.usage);
   const requestedByMode = section(saved.requestedByMode);
-  for (const reason of skipReasons) countIn(skips, reason);
+  for (const reason of skipReasons) countSkipIn(skips, reason);
   for (const mode of compactionModes) countIn(requestedByMode, mode);
   if (
     !isCount(latency.samples) ||
@@ -196,6 +203,7 @@ function readSnapshot(value: unknown): StatsSnapshot {
       threshold: countIn(skips, "threshold"),
       duplicate: countIn(skips, "duplicate"),
       busy: countIn(skips, "busy"),
+      idle: countSkipIn(skips, "idle"),
     },
     latency: {
       samples: latency.samples as number,
@@ -232,7 +240,7 @@ function zeroSnapshot(t: number): StatsSnapshot {
     errors: 0,
     diagnostics: 0,
     diagnosticErrors: 0,
-    skips: { evidence: 0, threshold: 0, duplicate: 0, busy: 0 },
+    skips: { evidence: 0, threshold: 0, duplicate: 0, busy: 0, idle: 0 },
     latency: { samples: 0, totalMs: 0, maxMs: 0 },
     usage: { samples: 0, inputTokens: 0, outputTokens: 0 },
     requestedByMode: { "provider-native": 0, "opencode-summary": 0 },

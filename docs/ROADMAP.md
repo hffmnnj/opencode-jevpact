@@ -41,6 +41,9 @@
 - Added bounded persistent provider/model aggregates for evaluations, decision outcomes, admitted requests/routes, Jev latency and token usage. Old totals stay unassigned; diagnostics and observed native completions stay global. Detail starts on the first attributed event, without transcript/session storage.
 - Typecheck and all 122 tests passed, including legacy-state compatibility, per-provider identity, privacy reconstruction, row cap, concurrent persistence, and plugin attribution. Both live locations remain enabled/healthy with zero storage errors and original collection timestamp; no model-bearing event had occurred at the rollout check (24 lifetime evaluations / 9 requests).
 
+- Added an activity tracker fed by session text, shell, child-execution, and context-hook events. A terminal turn with no remaining signal is now idle and skips Jev and compaction; approvals that land after work stops are vetoed at admission. Child sessions never become judgment or compaction targets. Idle skips are counted in lifetime stats with backward-compatible reading of older v1 state.
+- Typecheck and all 139 tests pass (11 suites) after rebasing the working tree onto the published main state.
+
 ## Follow-ups
 - Observe real-workload checkpoint frequency and token cost; no efficiency gain is claimed yet.
 - Actual provider compactions were not forced on active sessions during installation. Unit integration checks cover both route settings; native routing/resume semantics were source-reviewed.
