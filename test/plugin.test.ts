@@ -34,6 +34,7 @@ async function harness(options: {
   modelOption?: unknown;
   now?: number;
   statsStorageFailure?: "read" | "write";
+  parentID?: string;
 } = {}) {
   const hooks = new Map<string, (event: unknown) => Promise<void>>();
   const methods = new Map<string, (input: unknown, call: { signal: AbortSignal }) => Promise<unknown>>();
@@ -68,7 +69,7 @@ async function harness(options: {
       finally { signal.removeEventListener("abort", cancel); reader.releaseLock(); }
     } },
     session: {
-      get: async () => ({ location: { directory }, model, outcome: "succeeded" }),
+      get: async () => ({ location: { directory }, model, outcome: "succeeded", ...(options.parentID !== undefined ? { parentID: options.parentID } : {}) }),
       context: async () => messages,
       compact: async (input: unknown) => { if (options.admissionError) throw new Error("admission failed"); compactCalls.push(input); admitted.resolve(); },
       hook: async (name: string, handler: (event: unknown) => Promise<void>) => { hooks.set(name, handler); },
@@ -89,7 +90,7 @@ async function harness(options: {
     status: async () => await methods.get("status")!({}, { signal: new AbortController().signal }) as Record<string, unknown>,
     stats: async () => await methods.get("stats")!({}, { signal: new AbortController().signal }) as { stats: StatsSnapshot | null; statsStorageErrors: number },
     check: async () => await methods.get("check")!({}, { signal: new AbortController().signal }) as { ok: boolean; model: string },
-    emit: (type: "session.execution.succeeded" | "session.execution.interrupted" | "session.compaction.ended" | "session.synthetic") => controller.enqueue({ type, location: { directory }, data: { sessionID: "ses_test", reason: type === "session.compaction.ended" ? "manual" : "user", text: "" } } as OpenCodeEvent),
+    emit: (type: string, sessionID = "ses_test", data: Record<string, unknown> = {}) => controller.enqueue({ type, location: { directory }, data: { sessionID, reason: type === "session.compaction.ended" ? "manual" : "user", text: "", ...data } } as OpenCodeEvent),
     messages: (value: SessionMessageInfo[]) => { messages = value; },
     close: async () => { await cleanup!(); },
   };
@@ -186,14 +187,55 @@ test("failed native admission is contained and status never reports completion",
   finally { await app.close(); }
 });
 
-test("successful idle checkpoint can compact without any continuation prompt", async () => {
+test("a terminal execution with no remaining activity never compacts an idle session", async () => {
   const app = await harness();
   try {
+    app.emit("session.execution.succeeded");
+    await setImmediate();
+    assert.deepEqual(app.compactCalls, []);
+    assert.deepEqual(app.judgments, []);
+    const status = await app.status();
+    assert.match(String(status.lastSkipReason), /completely idle/);
+    assert.equal((await app.stats()).stats!.skips.idle, 1);
+  } finally { await app.close(); }
+});
+
+test("a running shell keeps an otherwise settled session eligible", async () => {
+  const app = await harness();
+  try {
+    app.emit("session.shell.started", "ses_test", { shell: { id: "sh_1", status: "running" } });
+    app.emit("session.execution.succeeded");
+    await app.admitted;
+    assert.deepEqual(app.compactCalls, [{ sessionID: "ses_test" }]);
+  } finally { await app.close(); }
+});
+
+test("a running subagent keeps the parent eligible and is itself never judged", async () => {
+  const app = await harness();
+  try {
+    app.emit("session.created", "ses_child", { parentID: "ses_test" });
+    app.emit("session.execution.started", "ses_child");
     app.emit("session.execution.succeeded");
     await app.admitted;
     assert.deepEqual(app.compactCalls, [{ sessionID: "ses_test" }]);
     assert.equal(app.judgments.length, 1);
   } finally { await app.close(); }
+});
+
+test("approval that lands after work stops is vetoed by the final idle guard", async () => {
+  const started = deferred<void>();
+  const result = deferred<Evaluation>();
+  const app = await harness({ judge: async () => { started.resolve(); return result.promise; } });
+  try {
+    const pending = app.context();
+    await started.promise;
+    app.emit("session.execution.succeeded");
+    await setImmediate();
+    result.resolve(approval);
+    await pending;
+    assert.deepEqual(app.compactCalls, []);
+    assert.ok((await app.stats()).stats!.skips.idle >= 1);
+  } finally { result.resolve(approval); await app.close(); }
 });
 
 test("user stop event cancels a positive hosted decision before admission", async () => {
@@ -460,6 +502,15 @@ test("new child result invalidates an in-flight positive checkpoint judgment", a
     assert.deepEqual(app.compactCalls, []);
     assert.equal((await app.stats()).stats!.cancelledEvaluations, 1);
   } finally { await app.close(); }
+});
+
+test("subagent sessions never reach hosted Jev or compaction while roots still can", async () => {
+  const child = await harness({ parentID: "ses_root" });
+  try { await child.context(); assert.deepEqual(child.judgments, []); assert.deepEqual(child.compactCalls, []); }
+  finally { await child.close(); }
+  const root = await harness();
+  try { await root.context(); assert.equal(root.judgments.length, 1); assert.deepEqual(root.compactCalls, [{ sessionID: "ses_test" }]); }
+  finally { await root.close(); }
 });
 
 test("truncated report never reaches hosted Jev or compaction", async () => {

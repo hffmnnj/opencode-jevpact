@@ -1,5 +1,6 @@
 import { Plugin, Rpc } from "@opencode/plugin";
 import type { ModelInfo } from "@opencode/client";
+import { ActivityTracker } from "./activity.ts";
 import { evaluate, parseModel } from "./client.ts";
 import { selectSnapshot } from "./evidence.ts";
 import type { EvidenceSkipReason } from "./evidence.ts";
@@ -64,6 +65,7 @@ export function createPlugin(dependencies: Dependencies = {}): Plugin.Plugin {
       const judge = dependencies.evaluate ?? evaluate;
       const now = dependencies.now ?? Date.now;
       const durableStats = createStats(ctx.storage, now);
+      const activity = new ActivityTracker();
       let statsStorageErrors = 0;
       const lifetime = new AbortController();
       const sessions = new Map<string, SessionState>();
@@ -118,11 +120,22 @@ export function createPlugin(dependencies: Dependencies = {}): Plugin.Plugin {
           const stream = ctx.event.subscribe({ signal: lifetime.signal });
           eventStreamHealthy = true;
           for await (const event of stream) {
+            // Activity is keyed by globally unique session ID. A child session
+            // may run in another directory (for example a worktree) and must
+            // still count as liveness for the parent being judged here.
+            activity.observe(event);
             if (event.location && event.location.directory !== ctx.location.directory) continue;
             if (event.type === "session.inbox.enqueued" || event.type === "session.synthetic" || event.type === "session.step.started" || event.type === "session.execution.interrupted" || event.type === "session.execution.failed") invalidate(event.data.sessionID);
             if (event.type === "session.execution.succeeded") {
-              // Do not block event consumption: a new user prompt must cancel this judgment.
-              launch(event.data.sessionID);
+              // A terminal execution with no remaining liveness signal is an idle
+              // session. It must never start a checkpoint judgment or compaction.
+              if (activity.state(event.data.sessionID).idle) {
+                lastSkipReason = "Session is completely idle: no streaming, subagent, or shell activity";
+                void record({ type: "skip", reason: "idle" });
+              } else {
+                // Do not block event consumption: a new user prompt must cancel this judgment.
+                launch(event.data.sessionID);
+              }
             }
             if (event.type === "session.compaction.started") {
               invalidate(event.data.sessionID);
@@ -185,6 +198,9 @@ export function createPlugin(dependencies: Dependencies = {}): Plugin.Plugin {
         let resolvedModel: { providerID: string; modelID: string } | undefined;
         try {
           const session = await ctx.session.get({ sessionID });
+          // Child sessions are observed as activity for their parent; they never
+          // become checkpoint or compaction targets themselves.
+          if (session.parentID !== undefined) return;
           if (session.location.directory !== ctx.location.directory || session.outcome === "interrupted" || session.outcome === "failed") return;
           const selected = ref ?? session.model;
           if (!selected) return;
@@ -209,6 +225,7 @@ export function createPlugin(dependencies: Dependencies = {}): Plugin.Plugin {
           }
           value.requests = view.requestsSinceCompaction;
           if (view.checkpoint === value.lastCheckpoint) { void record({ type: "skip", reason: "duplicate" }); return; }
+          const previousCheckpoint = value.lastCheckpoint;
           value.lastCheckpoint = view.checkpoint;
           if (!eligible(view.evidence, value, policy, now())) { lastSkipReason = "Below usage, growth, request-count, or cooldown threshold"; void record({ type: "skip", reason: "threshold" }); return; }
           const marker = `checkpoint/${sessionID}`;
@@ -228,6 +245,17 @@ export function createPlugin(dependencies: Dependencies = {}): Plugin.Plugin {
           void record({ type: "evaluation", outcome: compact ? "compact" : "wait", latencyMs: result.latencyMs, ...(result.usage ? { usage: result.usage } : {}), ...(resolvedModel ? { model: resolvedModel } : {}) });
           lastDecision = { at: now(), sessionID, checkpointID: view.checkpoint, requestSource: view.requestSource, thresholds: { boundary: policy.minProbability, supporting: policy.minSupportingProbability, confidence: policy.minConfidence }, action: compact ? "compact" : "wait", mode: compactionMode(model), providerID: model.providerID, modelID: model.id, judgeModel: result.model, inputTokens: view.evidence.inputTokens, answers: result.answers, latencyMs: result.latencyMs };
           if (!compact) return;
+          // Final guard: Jev may have approved while work was active, but a
+          // completely idle session must never be compacted. Recheck here so a
+          // judgment that finishes after work stopped cannot request compaction.
+          const current = activity.state(sessionID);
+          if (current.idle) {
+            value.lastCheckpoint = previousCheckpoint;
+            lastSkipReason = "Session is completely idle: no streaming, subagent, or shell activity";
+            lastDecision = { at: now(), sessionID, checkpointID: view.checkpoint, action: "wait", reason: lastSkipReason };
+            void record({ type: "skip", reason: "idle" });
+            return;
+          }
           // Persist only the checkpoint identity, not text; a reload must not repeat it.
           await ctx.storage.set(marker, view.checkpoint);
           if (signal.aborted || revision !== value.revision) return;
@@ -257,7 +285,12 @@ export function createPlugin(dependencies: Dependencies = {}): Plugin.Plugin {
       }
 
       await ctx.session.hook("prompt", (event) => { invalidate(event.sessionID); });
-      await ctx.session.hook("context", (event) => { launch(event.sessionID, event.model); });
+      await ctx.session.hook("context", (event) => {
+        // A context assembly means a model request is about to run; the agent is
+        // active at this point even before its first text delta arrives.
+        activity.noteRequest(event.sessionID);
+        launch(event.sessionID, event.model);
+      });
 
       return async () => {
         lifetime.abort();
