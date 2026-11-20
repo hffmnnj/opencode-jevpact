@@ -229,9 +229,14 @@ no build or packaging step.
   rather than raw requests; judgments there rest on that context.
 - Threshold defaults are provisional and may need tuning for your workload.
 - Checkpoints are considered before model requests and at successful turn
-  completion. An active turn continues through OpenCode's own runner after
-  compaction; an idle turn stays idle. New direction or stops cancel stale
-  decisions.
+  completion. A successful turn with no remaining liveness signal is idle and
+  is never compacted: the session is only eligible while an assistant text
+  stream, a running shell, a running subagent, or a model request is active.
+  This is checked again immediately before admission, so a judgment that
+  finishes after work stops cannot compact an idle session. Child sessions are
+  observed as parent activity and are never judged themselves. An active turn
+  continues through OpenCode's own runner after compaction; new direction or
+  stops cancel stale decisions.
 
 ## Diagnostics
 

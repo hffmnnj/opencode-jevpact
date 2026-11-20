@@ -1,4 +1,4 @@
-export type SkipReason = "evidence" | "threshold" | "duplicate" | "busy";
+export type SkipReason = "evidence" | "threshold" | "duplicate" | "busy" | "idle";
 export type CompactionMode = "provider-native" | "opencode-summary";
 
 export type ModelIdentity = { providerID: string; modelID: string };

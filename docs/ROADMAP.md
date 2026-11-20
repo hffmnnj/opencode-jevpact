@@ -21,8 +21,12 @@
 - Model settings choose the compactor: provider-native where configured, OpenCode-native
   summarization otherwise. The plugin does not override that routing, and native pressure
   compaction remains the fallback.
+- A session is compacted only while it shows a liveness signal: open assistant text, a running
+  shell, a running subagent, or a model request in flight. A terminal turn with none of these
+  is idle and is skipped before judgment; the guard is rechecked before admission so a late
+  approval cannot compact an idle session. Child sessions are parent activity, never targets.
 - Lifetime statistics live in native plugin storage and survive reloads and restarts. They
-  hold allow-listed counters, fixed skip reasons, latency, validated TypeSafe usage, route
+  hold allow-listed counters, fixed skip reasons (including idle skips), latency, validated TypeSafe usage, route
   counts and bounded provider/model aggregates. Diagnostics are separate from real
   evaluations. No transcript text, session identity, credentials, error strings, or estimated
   savings are stored.

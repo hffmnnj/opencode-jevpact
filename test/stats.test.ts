@@ -60,7 +60,7 @@ function zeroAt(t: number): StatsSnapshot {
     errors: 0,
     diagnostics: 0,
     diagnosticErrors: 0,
-    skips: { evidence: 0, threshold: 0, duplicate: 0, busy: 0 },
+    skips: { evidence: 0, threshold: 0, duplicate: 0, busy: 0, idle: 0 },
     latency: { samples: 0, totalMs: 0, maxMs: 0 },
     usage: { samples: 0, inputTokens: 0, outputTokens: 0 },
     requestedByMode: { "provider-native": 0, "opencode-summary": 0 },
@@ -138,7 +138,7 @@ describe("stats read", () => {
       ...zeroAt(1_000),
       evaluations: 2,
       updatedAt: 1_000,
-      skips: { evidence: 1, threshold: 0, duplicate: 0, busy: 0 },
+      skips: { evidence: 1, threshold: 0, duplicate: 0, busy: 0, idle: 0 },
     });
     assert.ok(!("excerpt" in snapshot));
     assert.ok(!("apiKey" in snapshot));
@@ -305,6 +305,7 @@ describe("stats record", () => {
       threshold: 1,
       duplicate: 1,
       busy: 2,
+      idle: 0,
     });
     assert.equal(snapshot.evaluations, 0);
     assert.equal(snapshot.errors, 0);
